@@ -3,6 +3,7 @@ import numpy as np
 from eightd_engine.audio_io import export_audio, load_audio
 from eightd_engine.dsp import (
     AudioData,
+    binaural_orbit,
     bpm_to_premium_rotation_cpm,
     fibonacci_preset_names,
     high_frequency_emphasis,
@@ -232,3 +233,69 @@ def test_fibonacci_presets_are_distinct_reference_width_and_bass_safe():
 
     assert rms_level(renders["phi_reference_orbit"] - renders["fibonacci_spiral"]) > 1e-3
     assert rms_level(renders["golden_figure8"] - renders["lucas_breath"]) > 1e-3
+
+
+def test_binaural_orbit_is_continuous_at_processing_boundaries():
+    sr = 44100
+    seconds = 3.0
+    source = np.column_stack([sine(1200, sr=sr, seconds=seconds), sine(1200, sr=sr, seconds=seconds)])
+
+    rendered = binaural_orbit(source, sr, rotation_cpm=5.78, motion_depth=0.9, panning_preset="reference_luxe")
+    diff = np.abs(np.diff(rendered[:, 0])) + np.abs(np.diff(rendered[:, 1]))
+    boundaries = np.arange(1024, len(rendered) - 1024, 1024)
+    boundary_jumps = diff[boundaries]
+    typical_jump = np.percentile(diff, 95) + 1e-12
+
+    # Regression guard for the old block-local delay implementation: it reset
+    # fractional-delay buffers every 1024 samples, creating zipper/static ticks
+    # that followed pan movement. Boundaries should now look like ordinary audio.
+    assert np.max(boundary_jumps) < typical_jump * 2.5
+
+
+def test_center_focus_keeps_vocal_band_more_front_center_while_air_still_moves():
+    sr = 44100
+    seconds = 5.0
+    bass = sine(70, sr=sr, seconds=seconds, amp=0.35)
+    vocal_body = sine(950, sr=sr, seconds=seconds, amp=0.20)
+    air = sine(7200, sr=sr, seconds=seconds, amp=0.06)
+    source = np.column_stack([bass + vocal_body + air, bass + vocal_body + air])
+
+    no_focus = process_8d(
+        AudioData(source, sr),
+        rotation_cpm=5.78,
+        room_size=0.0,
+        motion_depth=0.78,
+        high_emphasis=0.65,
+        spatial_mix=0.68,
+        panning_preset="reference_luxe",
+        preserve_quality=True,
+        center_focus=0.0,
+    ).samples
+    focused = process_8d(
+        AudioData(source, sr),
+        rotation_cpm=5.78,
+        room_size=0.0,
+        motion_depth=0.72,
+        high_emphasis=0.68,
+        spatial_mix=0.62,
+        panning_preset="reference_luxe",
+        preserve_quality=True,
+        center_focus=0.75,
+    ).samples
+
+    _bass_nf, moving_band_nf = split_bass_motion(no_focus, sr, crossover_hz=150)
+    _bass_f, moving_band_f = split_bass_motion(focused, sr, crossover_hz=150)
+
+    side_nf = rms_level((moving_band_nf[:, 0] - moving_band_nf[:, 1]) * 0.5)
+    mid_nf = rms_level((moving_band_nf[:, 0] + moving_band_nf[:, 1]) * 0.5)
+    side_f = rms_level((moving_band_f[:, 0] - moving_band_f[:, 1]) * 0.5)
+    mid_f = rms_level((moving_band_f[:, 0] + moving_band_f[:, 1]) * 0.5)
+
+    assert side_f / (mid_f + 1e-12) < (side_nf / (mid_nf + 1e-12)) * 0.55
+
+    # The high band still has spatial difference energy, so the result does not
+    # collapse to plain mono; the movement shifts to air/ambience as requested.
+    _, air_band = split_bass_motion(focused, sr, crossover_hz=4000)
+    air_side = rms_level((air_band[:, 0] - air_band[:, 1]) * 0.5)
+    air_mid = rms_level((air_band[:, 0] + air_band[:, 1]) * 0.5)
+    assert air_side / (air_mid + 1e-12) > 0.08

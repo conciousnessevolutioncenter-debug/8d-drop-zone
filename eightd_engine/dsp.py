@@ -612,6 +612,22 @@ def _azimuth_series(
     return az % 360.0
 
 
+def _variable_fractional_delay(signal: np.ndarray, delay_samples: np.ndarray) -> np.ndarray:
+    """Apply a smooth time-varying fractional delay.
+
+    This is used for ITD cues. Unlike block-local delay processing, the
+    interpolation is evaluated against the full continuous source, so there are
+    no per-block zero pads or zipper clicks at 1024-sample boundaries.
+    """
+
+    x = np.asarray(signal, dtype=np.float64)
+    d = np.asarray(delay_samples, dtype=np.float64)
+    if len(x) == 0:
+        return x.copy()
+    positions = np.arange(len(x), dtype=np.float64) - d
+    return np.interp(positions, np.arange(len(x), dtype=np.float64), x, left=0.0, right=0.0)
+
+
 def binaural_orbit(
     motion: np.ndarray,
     sample_rate: int,
@@ -624,51 +640,77 @@ def binaural_orbit(
     """Render the motion band as a rotating binaural-ish source.
 
     The input motion band is reduced to a mono object for stable localization.
-    Each processing block gets an azimuth, equal-power gains, ITD delay, and
-    subtle rear shading. Blocks are crossfaded by using short block sizes.
+    Earlier versions updated pan/delay in blocks; that can create audible
+    jitter because each delayed block starts with fresh zero-padding. This
+    renderer computes ILD, ITD, and rear shading as continuous per-sample curves.
+    The block_size argument is retained for API compatibility but is no longer
+    used to quantize spatial motion.
     """
 
     stereo = ensure_stereo_float(motion)
     source = stereo.mean(axis=1)
     n = len(source)
-    out = np.zeros((n, 2), dtype=np.float64)
+    if n == 0:
+        return np.zeros((0, 2), dtype=np.float64)
+
     azimuths = _azimuth_series(n, sample_rate, rotation_cpm, panning_preset=panning_preset)
     depth = float(np.clip(motion_depth, 0.0, 1.5))
     if automation_curve is None:
         automation = np.ones(n, dtype=np.float64)
     else:
         automation = np.resize(np.asarray(automation_curve, dtype=np.float64), n)
+    local_depth = np.clip(depth * automation, 0.0, 1.5)
 
-    for start in range(0, n, block_size):
-        end = min(start + block_size, n)
-        block = source[start:end]
-        az = float(azimuths[start])
-        local_depth = float(np.clip(depth * np.mean(automation[start:end]), 0.0, 1.5))
-        left_gain, right_gain = equal_power_gains(az)
-        signed_delay = itd_samples(az, sample_rate) * local_depth
+    theta = np.radians(azimuths % 360.0)
+    pan = np.sin(theta)
+    center_gain = math.sqrt(0.5)
+    left_gain = np.sqrt(0.5 * (1.0 - pan))
+    right_gain = np.sqrt(0.5 * (1.0 + pan))
+    # Blend equal-power pan law toward center for restrained premium motion.
+    left_gain = center_gain + (left_gain - center_gain) * local_depth
+    right_gain = center_gain + (right_gain - center_gain) * local_depth
 
-        # Blend the equal-power pan gains back toward center to control extremity.
-        center_gain = math.sqrt(0.5)
-        left_gain = center_gain + (left_gain - center_gain) * local_depth
-        right_gain = center_gain + (right_gain - center_gain) * local_depth
+    signed_delay = MAX_ITD_SECONDS * sample_rate * np.sin(theta) * local_depth
+    left_delay = np.maximum(signed_delay, 0.0)
+    right_delay = np.maximum(-signed_delay, 0.0)
 
-        left = block * left_gain
-        right = block * right_gain
-        if signed_delay > 0:
-            left = apply_fractional_delay(left, signed_delay)
-        elif signed_delay < 0:
-            right = apply_fractional_delay(right, -signed_delay)
+    left = _variable_fractional_delay(source * left_gain, left_delay)
+    right = _variable_fractional_delay(source * right_gain, right_delay)
 
-        # Rear is strongest at 180°. Darken slightly and lower direct level a bit.
-        rear_amount = max(0.0, math.cos(math.radians(az - 180.0)))
-        rear_amount = rear_amount * rear_amount * local_depth
-        rear_gain = 1.0 - 0.18 * rear_amount
-        pair = np.column_stack([left, right]) * rear_gain
-        pair[:, 0] = _rear_shade(pair[:, 0], 0.35 * rear_amount)
-        pair[:, 1] = _rear_shade(pair[:, 1], 0.35 * rear_amount)
-        out[start:end] = pair
+    # Rear is strongest at 180°. Darken slightly and lower direct level a bit.
+    rear_amount = np.maximum(0.0, np.cos(np.radians(azimuths - 180.0)))
+    rear_amount = rear_amount * rear_amount * local_depth
+    rear_gain = 1.0 - 0.18 * rear_amount
+    pair = np.column_stack([left, right]) * rear_gain[:, None]
 
-    return out
+    # Use one continuous low-pass pass and a time-varying blend for rear shading.
+    # This avoids resetting the filter state every block, another source of
+    # zipper-like artifacts that can seem to follow the pan automation.
+    pair[:, 0] = pair[:, 0] * (1.0 - 0.35 * rear_amount) + _rear_shade(pair[:, 0], 1.0) * (0.35 * rear_amount)
+    pair[:, 1] = pair[:, 1] * (1.0 - 0.35 * rear_amount) + _rear_shade(pair[:, 1], 1.0) * (0.35 * rear_amount)
+    return pair
+
+
+def split_center_focus_bands(
+    motion: np.ndarray,
+    sample_rate: int,
+    focus_hz: float = 3200.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split movable content into vocal/body and air/ambience regions.
+
+    With a finished stereo master we cannot isolate the lead vocal as a true
+    stem. This band split is the professional compromise: the 150 Hz-3.2 kHz
+    body/intelligibility region is treated as the front-center anchor, while the
+    air, shimmer, reverbs, delays, and guitar brightness above it carry more of
+    the 8D motion.
+    """
+
+    stereo = ensure_stereo_float(motion)
+    body = np.empty_like(stereo)
+    air = np.empty_like(stereo)
+    for ch in range(2):
+        body[:, ch], air[:, ch] = _fft_split_mono(stereo[:, ch], sample_rate, focus_hz)
+    return body, air
 
 
 def process_8d(
@@ -684,6 +726,7 @@ def process_8d(
     preserve_quality: bool = False,
     youtube_master: bool = False,
     section_automation: bool = False,
+    center_focus: float = 0.0,
 ) -> AudioData:
     """Convert a stereo track into an 8D-style headphone render."""
 
@@ -692,9 +735,23 @@ def process_8d(
         samples = reduce_static_noise(samples, audio.sample_rate, amount=denoise_amount)
     bass, motion = split_bass_motion(samples, audio.sample_rate, crossover_hz=crossover_hz)
     motion = high_frequency_emphasis(motion, audio.sample_rate, amount=high_emphasis)
+
+    focus = float(np.clip(center_focus, 0.0, 1.0))
+    center_anchor = np.zeros_like(motion)
+    orbit_motion = motion
+    if focus > 0.0:
+        body, air = split_center_focus_bands(motion, audio.sample_rate, focus_hz=3200.0)
+        body_center = np.column_stack([body.mean(axis=1), body.mean(axis=1)])
+        # Keep the main vocal/guitar/body region mostly frontal. A reduced copy
+        # still enters the orbit so the moving highs stay attached to the source,
+        # but the intelligibility band no longer feels like it circles the head.
+        body_motion_gain = 1.0 - 0.68 * focus
+        center_anchor = body_center * (0.58 * focus)
+        orbit_motion = air + body * body_motion_gain
+
     automation = section_automation_curve(len(samples), audio.sample_rate) if section_automation else None
     moving = binaural_orbit(
-        motion,
+        orbit_motion,
         audio.sample_rate,
         rotation_cpm=rotation_cpm,
         motion_depth=motion_depth,
@@ -706,11 +763,10 @@ def process_8d(
     wet = float(np.clip(spatial_mix, 0.0, 1.0))
     dry_gain = 1.0 - wet
     if preserve_quality:
-        # Keep a quiet unspatialized mid/high "clarity bed" under the orbit so
-        # vocals, transient detail, and original stereo tone are enhanced rather
-        # than hollowed out by the mono moving object.
-        dry_gain += 0.12 * wet
-    moving = motion * dry_gain + moving * wet
+        # Keep an unspatialized clarity bed under the orbit so vocals, transient
+        # detail, and original stereo tone are enhanced rather than hollowed out.
+        dry_gain += (0.12 + 0.10 * focus) * wet
+    moving = motion * dry_gain + center_anchor + moving * wet
     mixed = bass + moving + room
     if youtube_master:
         mixed = apply_youtube_master_target(mixed, target_rms_db=-13.0, peak_ceiling_db=-1.0)

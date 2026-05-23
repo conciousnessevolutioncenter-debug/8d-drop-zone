@@ -332,19 +332,22 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         reference_speed_presets = {"reference_luxe", "phi_reference_orbit", "fibonacci_spiral", "golden_figure8", "lucas_breath"}
         rotation_cpm = 5.78 if safe_preset in reference_speed_presets else bpm_to_premium_rotation_cpm(bpm)
         preset_settings = {
-            "reference_luxe": dict(room_size=0.22, motion_depth=0.86, high_emphasis=0.72, spatial_mix=0.74),
-            "phi_reference_orbit": dict(room_size=0.22, motion_depth=0.84, high_emphasis=0.72, spatial_mix=0.74),
-            "fibonacci_spiral": dict(room_size=0.24, motion_depth=0.88, high_emphasis=0.76, spatial_mix=0.76),
-            "golden_figure8": dict(room_size=0.20, motion_depth=0.82, high_emphasis=0.70, spatial_mix=0.72),
-            "lucas_breath": dict(room_size=0.26, motion_depth=0.68, high_emphasis=0.64, spatial_mix=0.66),
-            "wide_orbit": dict(room_size=0.20, motion_depth=0.84, high_emphasis=0.68, spatial_mix=0.72),
-            "vocal_safe": dict(room_size=0.14, motion_depth=0.52, high_emphasis=0.48, spatial_mix=0.54),
-            "cinematic_halo": dict(room_size=0.24, motion_depth=0.70, high_emphasis=0.62, spatial_mix=0.66),
-            "figure8": dict(room_size=0.18, motion_depth=0.76, high_emphasis=0.62, spatial_mix=0.68),
+            # Mix-engineer feedback profile: keep lead/body front-center, move air,
+            # guitar brightness, ambience, and generated room instead of spinning
+            # the whole vocal image.
+            "reference_luxe": dict(room_size=0.20, motion_depth=0.72, high_emphasis=0.68, spatial_mix=0.62, center_focus=0.72),
+            "phi_reference_orbit": dict(room_size=0.20, motion_depth=0.70, high_emphasis=0.68, spatial_mix=0.62, center_focus=0.74),
+            "fibonacci_spiral": dict(room_size=0.22, motion_depth=0.76, high_emphasis=0.72, spatial_mix=0.66, center_focus=0.62),
+            "golden_figure8": dict(room_size=0.18, motion_depth=0.70, high_emphasis=0.66, spatial_mix=0.60, center_focus=0.70),
+            "lucas_breath": dict(room_size=0.24, motion_depth=0.62, high_emphasis=0.62, spatial_mix=0.58, center_focus=0.78),
+            "wide_orbit": dict(room_size=0.18, motion_depth=0.78, high_emphasis=0.66, spatial_mix=0.66, center_focus=0.50),
+            "vocal_safe": dict(room_size=0.14, motion_depth=0.48, high_emphasis=0.48, spatial_mix=0.46, center_focus=0.88),
+            "cinematic_halo": dict(room_size=0.22, motion_depth=0.64, high_emphasis=0.60, spatial_mix=0.58, center_focus=0.74),
+            "figure8": dict(room_size=0.16, motion_depth=0.68, high_emphasis=0.60, spatial_mix=0.58, center_focus=0.66),
         }
         settings = preset_settings.get(
             safe_preset,
-            dict(room_size=0.18, motion_depth=0.78, high_emphasis=0.65, spatial_mix=0.68),
+            dict(room_size=0.18, motion_depth=0.68, high_emphasis=0.62, spatial_mix=0.58, center_focus=0.72),
         )
         _set_job(
             job_id,
@@ -366,6 +369,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             preserve_quality=True,
             youtube_master=False,
             section_automation=True,
+            center_focus=settings["center_focus"],
         )
         _set_job(job_id, message="Writing WAV export…")
         report = analyze_correlation(rendered.samples)
