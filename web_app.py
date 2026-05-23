@@ -7,12 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from eightd_engine.audio_io import export_audio, load_audio
-from eightd_engine.dsp import analyze_correlation, bpm_to_premium_rotation_cpm, estimate_bpm, process_8d
+from eightd_engine.dsp import analyze_correlation, bpm_to_premium_rotation_cpm, estimate_bpm, panning_preset_names, process_8d
 
 APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,6 +49,7 @@ HTML = """
     .footer { color:#64748b; margin-top:18px; font-size:13px; line-height:1.4; }
     a { color:#22c55e; font-weight:800; }
     input { display:none; }
+    select { margin-top:18px; padding:12px 14px; border:1px solid #334155; border-radius:12px; background:#020617; color:#f8fafc; font-weight:700; }
     button { margin-top:18px; padding:12px 18px; border:0; border-radius:12px; background:#38bdf8; color:#020617; font-weight:800; cursor:pointer; }
   </style>
 </head>
@@ -60,6 +61,13 @@ HTML = """
       <div class="arrow">⬇</div>
       <div class="title" id="title">Drop Audio Here</div>
       <div class="hint" id="hint">Drop any audio file FFmpeg/soundfile can decode → ultra-fast upload handoff, BPM lock, 150 Hz mono bass protection, HRTF-inspired orbit, subtle room, YouTube-safe master. Long DJ sets are allowed; processing can take several minutes after upload.</div>
+      <select id="preset">
+        <option value="fireflies_plus">Fireflies Plus — premium reference orbit</option>
+        <option value="cinematic_halo">Cinematic Halo — smooth atmospheric surround</option>
+        <option value="figure8">Figure 8 — front/back immersive sweep</option>
+        <option value="wide_orbit">Wide Orbit — powerful chorus motion</option>
+        <option value="vocal_safe">Vocal Safe — clear center, gentle motion</option>
+      </select>
       <button onclick="document.getElementById('file').click()">Choose File</button>
       <input id="file" type="file">
       <div class="bar" id="bar"><div class="fill"></div></div>
@@ -74,6 +82,7 @@ const title = document.getElementById('title');
 const hint = document.getElementById('hint');
 const statusEl = document.getElementById('status');
 const bar = document.getElementById('bar');
+const preset = document.getElementById('preset');
 
 ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('hover'); title.textContent='Release to Convert'; }));
 ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('hover'); }));
@@ -89,6 +98,7 @@ async function upload(f) {
   document.querySelector('.fill').classList.remove('indeterminate');
   const data = new FormData();
   data.append('file', f);
+  data.append('preset', preset.value);
   try {
     const json = await xhrUpload('/convert', data, pct => {
       statusEl.textContent = `Uploading: ${pct}%`;
@@ -131,7 +141,7 @@ async function pollJob(jobId) {
     if (job.status === 'complete') {
       title.textContent = 'Success!';
       hint.innerHTML = `<a href="${job.download_url}" download>Download ${job.output_name}</a>`;
-      statusEl.textContent = `BPM: ${job.bpm}\n2-bar orbit: ${job.rotation_cpm} cycles/min\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
+      statusEl.textContent = `Preset: ${job.preset}\nBPM: ${job.bpm}\nPremium orbit: ${job.rotation_cpm} cycles/min\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
       return;
     }
     if (job.status === 'failed') throw new Error(job.error || 'Render failed');
@@ -154,13 +164,14 @@ def _set_job(job_id: str, **updates):
         job.update(updates)
         job["updated_at"] = time.time()
 
-def _process_job(job_id: str, src: Path, out: Path):
+def _process_job(job_id: str, src: Path, out: Path, preset: str = "fireflies_plus"):
     try:
         _set_job(job_id, status="processing", message="Analyzing BPM…")
         audio = load_audio(src)
         bpm = estimate_bpm(audio)
         rotation_cpm = bpm_to_premium_rotation_cpm(bpm)
-        _set_job(job_id, message="Rendering 8D orbit…", bpm=round(bpm, 1), rotation_cpm=round(rotation_cpm, 2))
+        safe_preset = preset if preset in panning_preset_names() else "fireflies_plus"
+        _set_job(job_id, message="Cleaning static, then rendering premium 8D orbit…", bpm=round(bpm, 1), rotation_cpm=round(rotation_cpm, 2), preset=safe_preset)
         rendered = process_8d(
             audio,
             rotation_cpm=rotation_cpm,
@@ -169,6 +180,8 @@ def _process_job(job_id: str, src: Path, out: Path):
             motion_depth=0.78,
             high_emphasis=0.65,
             spatial_mix=0.68,
+            denoise_amount=0.72,
+            panning_preset=safe_preset,
             preserve_quality=True,
             youtube_master=False,
             section_automation=True,
@@ -187,12 +200,13 @@ def _process_job(job_id: str, src: Path, out: Path):
             correlation=round(report.correlation, 3),
             side_mid_ratio=round(report.side_mid_ratio, 3),
             phase="phase warning" if report.phase_warning else "phase safe",
+            preset=safe_preset,
         )
     except Exception as exc:
         _set_job(job_id, status="failed", message="Render failed.", error=str(exc))
 
 @app.post("/convert")
-async def convert(file: UploadFile = File(...)):
+async def convert(file: UploadFile = File(...), preset: str = Form("fireflies_plus")):
     suffix = Path(file.filename or "audio").suffix.lower() or ".audio"
     safe_stem = Path(file.filename or "audio").stem.replace("/", "_").replace("\\", "_")[:80]
     job_id = uuid.uuid4().hex[:12]
@@ -202,7 +216,7 @@ async def convert(file: UploadFile = File(...)):
         while chunk := await file.read(1024 * 1024):
             f.write(chunk)
     _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name)
-    EXECUTOR.submit(_process_job, job_id, src, out)
+    EXECUTOR.submit(_process_job, job_id, src, out, preset)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing", "message": "Upload accepted. DSP render started."})
 
 @app.get("/jobs/{job_id}")

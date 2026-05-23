@@ -5,8 +5,10 @@ from eightd_engine.dsp import (
     AudioData,
     bpm_to_premium_rotation_cpm,
     high_frequency_emphasis,
+    panning_preset_names,
     preserve_loudness_and_peak,
     process_8d,
+    reduce_static_noise,
     rms_level,
     split_bass_motion,
 )
@@ -110,3 +112,36 @@ def test_high_frequency_focus_adds_air_cues_without_thinning_midrange_root():
     assert abs(low_change_db) < 0.35
     # The air/detail band gets extra cue energy for rear/height perception.
     assert high_change_db > 0.7
+
+
+def test_static_noise_reduction_lowers_hiss_without_erasing_music():
+    sr = 44100
+    rng = np.random.default_rng(123)
+    music = np.column_stack([
+        sine(440, sr=sr, seconds=2.0, amp=0.22),
+        sine(660, sr=sr, seconds=2.0, amp=0.20),
+    ])
+    hiss = rng.normal(0.0, 0.018, size=music.shape)
+    noisy = music + hiss
+
+    cleaned = reduce_static_noise(noisy, sr, amount=0.9)
+
+    before_noise = rms_level(noisy - music)
+    after_noise = rms_level(cleaned - music)
+    music_retention = rms_level(cleaned) / (rms_level(music) + 1e-12)
+
+    assert after_noise < before_noise * 0.72
+    assert 0.72 <= music_retention <= 1.05
+
+
+def test_premium_panning_presets_are_available_and_distinct():
+    names = panning_preset_names()
+    assert {"fireflies_plus", "cinematic_halo", "figure8", "wide_orbit", "vocal_safe"}.issubset(names)
+
+    sr = 44100
+    source = np.column_stack([sine(1300, sr=sr, seconds=2.0), sine(1300, sr=sr, seconds=2.0)])
+    fireflies = process_8d(AudioData(source, sr), panning_preset="fireflies_plus", room_size=0.0).samples
+    figure8 = process_8d(AudioData(source, sr), panning_preset="figure8", room_size=0.0).samples
+
+    assert fireflies.shape == figure8.shape == source.shape
+    assert rms_level(fireflies - figure8) > 1e-3

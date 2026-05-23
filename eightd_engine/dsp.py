@@ -389,6 +389,57 @@ def section_automation_curve(num_frames: int, sample_rate: int) -> np.ndarray:
     return np.clip(curve, 0.35, 1.15)
 
 
+def reduce_static_noise(samples: np.ndarray, sample_rate: int, amount: float = 0.65) -> np.ndarray:
+    """Gently reduce steady hiss/static before spatial rendering.
+
+    The cleaner is intentionally conservative: it combines a light spectral gate
+    with a tiny impulse de-crackle stage. It is designed for already-mastered
+    songs where the goal is removing static while preserving transients, vocal
+    clarity, stereo tone, and musical brightness.
+    """
+
+    amt = float(np.clip(amount, 0.0, 1.0))
+    stereo = ensure_stereo_float(samples)
+    if amt <= 0.0 or len(stereo) < 32:
+        return stereo
+
+    cleaned = np.empty_like(stereo)
+    try:
+        from scipy.signal import medfilt  # type: ignore
+
+        for ch in range(2):
+            x = stereo[:, ch]
+            # De-crackle: replace only extreme single-sample outliers relative
+            # to a median neighborhood. This avoids dulling drums/transients.
+            kernel = 5 if len(x) >= 5 else 3
+            median = medfilt(x, kernel_size=kernel)
+            residual = x - median
+            mad = np.median(np.abs(residual - np.median(residual))) + 1e-12
+            threshold = max(0.08, 10.0 * mad)
+            declicked = np.where(np.abs(residual) > threshold, median + np.sign(residual) * threshold, x)
+
+            spectrum = np.fft.rfft(declicked)
+            mag = np.abs(spectrum)
+            freqs = np.fft.rfftfreq(len(declicked), d=1.0 / sample_rate)
+            noise_floor = np.percentile(mag, 35)
+            # Preserve tonal/musical bins and attenuate broadband low-level hash.
+            # Weight higher frequencies slightly more because static is most
+            # audible there, but still clean full-band hiss gently.
+            band_weight = np.clip((freqs - 1200.0) / 6500.0, 0.35, 1.0)
+            reduction = amt * band_weight * (noise_floor / (mag + 1e-12)) ** 1.2
+            gain = np.clip(1.0 - reduction, 0.35, 1.0)
+            cleaned[:, ch] = np.fft.irfft(spectrum * gain, n=len(declicked))
+    except Exception:
+        # Dependency-free fallback: a very gentle one-pole smoothing blend only
+        # above the static/noise region.
+        for ch in range(2):
+            low, high = _fft_split_mono(stereo[:, ch], sample_rate, 5500.0)
+            smooth = _rear_shade(high, 0.28 * amt)
+            cleaned[:, ch] = low + smooth
+
+    return preserve_loudness_and_peak(cleaned, stereo, peak_ceiling_db=-1.0, max_rms_lift_db=0.0)
+
+
 def _simple_room_reverb(stereo: np.ndarray, sample_rate: int, amount: float) -> np.ndarray:
     """Small synthetic room made from feedback comb delays.
 
@@ -420,12 +471,50 @@ def _simple_room_reverb(stereo: np.ndarray, sample_rate: int, amount: float) -> 
     return out * (0.35 * wet)
 
 
-def _azimuth_series(num_frames: int, sample_rate: int, rotation_cpm: float) -> np.ndarray:
-    """Generate one azimuth degree per sample for smooth circular orbit."""
+PANNING_PRESETS = {
+    "fireflies_plus": "Reference-inspired smooth premium orbit with subtle organic drift.",
+    "cinematic_halo": "Slow halo movement: wide, emotional, atmospheric, non-dizzy.",
+    "figure8": "Figure-eight style front/back emphasis with changing side energy.",
+    "wide_orbit": "Bigger theatrical circular orbit for choruses and drops.",
+    "vocal_safe": "Restrained motion that preserves lyric focus and center clarity.",
+}
+
+
+def panning_preset_names() -> set[str]:
+    """Return available premium panning preset names."""
+
+    return set(PANNING_PRESETS)
+
+
+def _azimuth_series(
+    num_frames: int,
+    sample_rate: int,
+    rotation_cpm: float,
+    panning_preset: str = "fireflies_plus",
+) -> np.ndarray:
+    """Generate one azimuth degree per sample for smooth musical orbit presets."""
 
     cycles_per_second = max(0.01, float(rotation_cpm) / 60.0)
     t = np.arange(num_frames, dtype=np.float64) / float(sample_rate)
-    return (t * cycles_per_second * 360.0) % 360.0
+    base = t * cycles_per_second * 360.0
+    preset = panning_preset if panning_preset in PANNING_PRESETS else "fireflies_plus"
+
+    if preset == "cinematic_halo":
+        # Slow emotional circle with mild non-repeating drift.
+        az = base * 0.72 + 18.0 * np.sin(2 * np.pi * cycles_per_second * 0.23 * t)
+    elif preset == "figure8":
+        # Alternates side travel with stronger front/back sweeps.
+        az = base + 42.0 * np.sin(2 * np.pi * cycles_per_second * 2.0 * t)
+    elif preset == "wide_orbit":
+        az = base * 1.08 + 10.0 * np.sin(2 * np.pi * cycles_per_second * 0.5 * t)
+    elif preset == "vocal_safe":
+        # Hover around front/side quadrants more than hard rear so lyrics stay clear.
+        az = 35.0 + 95.0 * np.sin(2 * np.pi * cycles_per_second * t)
+    else:  # fireflies_plus
+        az = base + 14.0 * np.sin(2 * np.pi * cycles_per_second * 0.5 * t) + 7.0 * np.sin(
+            2 * np.pi * cycles_per_second * 1.5 * t
+        )
+    return az % 360.0
 
 
 def binaural_orbit(
@@ -434,6 +523,7 @@ def binaural_orbit(
     rotation_cpm: float = 6.0,
     motion_depth: float = 1.0,
     automation_curve: np.ndarray | None = None,
+    panning_preset: str = "fireflies_plus",
     block_size: int = 1024,
 ) -> np.ndarray:
     """Render the motion band as a rotating binaural-ish source.
@@ -447,7 +537,7 @@ def binaural_orbit(
     source = stereo.mean(axis=1)
     n = len(source)
     out = np.zeros((n, 2), dtype=np.float64)
-    azimuths = _azimuth_series(n, sample_rate, rotation_cpm)
+    azimuths = _azimuth_series(n, sample_rate, rotation_cpm, panning_preset=panning_preset)
     depth = float(np.clip(motion_depth, 0.0, 1.5))
     if automation_curve is None:
         automation = np.ones(n, dtype=np.float64)
@@ -494,6 +584,8 @@ def process_8d(
     motion_depth: float = 1.0,
     high_emphasis: float = 0.0,
     spatial_mix: float = 1.0,
+    denoise_amount: float = 0.0,
+    panning_preset: str = "fireflies_plus",
     preserve_quality: bool = False,
     youtube_master: bool = False,
     section_automation: bool = False,
@@ -501,6 +593,8 @@ def process_8d(
     """Convert a stereo track into an 8D-style headphone render."""
 
     samples = ensure_stereo_float(audio.samples)
+    if denoise_amount > 0.0:
+        samples = reduce_static_noise(samples, audio.sample_rate, amount=denoise_amount)
     bass, motion = split_bass_motion(samples, audio.sample_rate, crossover_hz=crossover_hz)
     motion = high_frequency_emphasis(motion, audio.sample_rate, amount=high_emphasis)
     automation = section_automation_curve(len(samples), audio.sample_rate) if section_automation else None
@@ -510,6 +604,7 @@ def process_8d(
         rotation_cpm=rotation_cpm,
         motion_depth=motion_depth,
         automation_curve=automation,
+        panning_preset=panning_preset,
     )
     room_curve = automation[:, None] if automation is not None else 1.0
     room = _simple_room_reverb(moving, audio.sample_rate, room_size) * room_curve
