@@ -13,7 +13,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-try:  # Native OS drag-and-drop support. App still launches with a helpful note if missing.
+try:  # Native OS drag-and-drop support. App still launches if the extension is missing/incompatible.
     from tkinterdnd2 import DND_FILES, TkinterDnD  # type: ignore
 
     DND_AVAILABLE = True
@@ -31,10 +31,7 @@ from .dsp import (
 )
 
 
-BaseWindow = TkinterDnD.Tk if DND_AVAILABLE else tk.Tk
-
-
-class DropZoneApp(BaseWindow):
+class DropZoneApp(tk.Tk):
     """One-action drop-zone front-end for automatic 8D conversion."""
 
     BG = "#0b0f17"
@@ -199,14 +196,21 @@ class DropZoneApp(BaseWindow):
             )
 
     def _enable_drop_target(self) -> None:
-        if not DND_AVAILABLE:
+        if not DND_AVAILABLE or TkinterDnD is None:
             return
-        # Register the whole window and visible drop card so native hover/drop works reliably.
-        for widget in (self, self.drop_frame):
-            widget.drop_target_register(DND_FILES)
-            widget.dnd_bind("<<DropEnter>>", self._on_drop_enter)
-            widget.dnd_bind("<<DropLeave>>", self._on_drop_leave)
-            widget.dnd_bind("<<Drop>>", self._on_drop)
+        try:
+            # Load the native tkdnd extension after the Tk root exists. Some Linux
+            # builds ship a tkinterdnd2 wheel that cannot load against newer Tcl;
+            # in that case the app remains usable and shows a clear install note.
+            TkinterDnD._require(self)  # type: ignore[attr-defined]
+            # Register the whole window and visible drop card so native hover/drop works reliably.
+            for widget in (self, self.drop_frame):
+                widget.drop_target_register(DND_FILES)
+                widget.dnd_bind("<<DropEnter>>", self._on_drop_enter)
+                widget.dnd_bind("<<DropLeave>>", self._on_drop_leave)
+                widget.dnd_bind("<<Drop>>", self._on_drop)
+        except Exception as exc:  # pragma: no cover - depends on local Tcl/tkdnd binary compatibility
+            self._set_error(f"Drag-and-drop unavailable in this Python/Tk build: {exc}. Install/update tkinterdnd2 or run on Windows/macOS.")
 
     def _set_drop_colors(self, panel_color: str, accent_color: str | None = None) -> None:
         accent = accent_color or self.ACCENT
