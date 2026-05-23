@@ -138,7 +138,7 @@ def test_static_noise_reduction_lowers_hiss_without_erasing_music():
 
 def test_premium_panning_presets_are_available_and_distinct():
     names = panning_preset_names()
-    assert {"fireflies_plus", "cinematic_halo", "figure8", "wide_orbit", "vocal_safe", "reference_luxe"}.issubset(names)
+    assert {"fireflies_plus", "cinematic_halo", "figure8", "wide_orbit", "vocal_safe", "reference_luxe", "clean_reference"}.issubset(names)
 
     sr = 44100
     source = np.column_stack([sine(1300, sr=sr, seconds=2.0), sine(1300, sr=sr, seconds=2.0)])
@@ -149,6 +149,41 @@ def test_premium_panning_presets_are_available_and_distinct():
     assert fireflies.shape == figure8.shape == reference.shape == source.shape
     assert rms_level(fireflies - figure8) > 1e-3
     assert rms_level(reference - fireflies) > 1e-3
+
+
+def test_clean_reference_preset_matches_cleaner_reference_width_and_bass_safety():
+    sr = 44100
+    seconds = 8.0
+    bass = sine(58, sr=sr, seconds=seconds, amp=0.42)
+    vocal = sine(920, sr=sr, seconds=seconds, amp=0.16)
+    shimmer_l = sine(6400, sr=sr, seconds=seconds, amp=0.05)
+    shimmer_r = sine(7100, sr=sr, seconds=seconds, amp=0.045)
+    source = np.column_stack([bass + vocal + shimmer_l, bass + vocal + shimmer_r])
+
+    rendered = process_8d(
+        AudioData(source, sr),
+        rotation_cpm=7.76,
+        room_size=0.14,
+        crossover_hz=150,
+        motion_depth=0.58,
+        high_emphasis=0.42,
+        spatial_mix=0.52,
+        panning_preset="clean_reference",
+        preserve_quality=True,
+        section_automation=True,
+        center_focus=0.84,
+        felt_presence=0.42,
+    ).samples
+
+    bass_band, motion_band = split_bass_motion(rendered, sr, crossover_hz=150)
+    low_side = rms_level(bass_band[:, 0] - bass_band[:, 1])
+    low_mid = rms_level(bass_band.mean(axis=1))
+    motion_side = rms_level((motion_band[:, 0] - motion_band[:, 1]) * 0.5)
+    motion_mid = rms_level((motion_band[:, 0] + motion_band[:, 1]) * 0.5)
+
+    assert low_side < low_mid * 0.05
+    assert 0.10 <= motion_side / (motion_mid + 1e-12) <= 0.75
+    assert np.max(np.abs(rendered)) <= 10 ** (-1.0 / 20.0) + 1e-12
 
 
 def test_reference_luxe_mix_keeps_reference_style_width_with_safe_bass():

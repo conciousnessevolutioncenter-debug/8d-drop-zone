@@ -536,6 +536,7 @@ def _simple_room_reverb(stereo: np.ndarray, sample_rate: int, amount: float) -> 
 
 
 PANNING_PRESETS = {
+    "clean_reference": "Cleaner YouTube-reference mix: faster 7.7-second orbit, tighter width, stronger center, darker air, and punch-safe bass.",
     "reference_luxe": "Measured YouTube-reference orbit: 10.4-second sweep, wide mids/highs, protected mono bass.",
     "phi_reference_orbit": "Golden Ratio version of the measured reference: phi-weighted timing, drift, and rear shading.",
     "fibonacci_spiral": "Fibonacci-timed spiral that visits golden-angle spatial nodes around the listener.",
@@ -619,7 +620,14 @@ def _azimuth_series(
     base = t * cycles_per_second * 360.0
     preset = panning_preset if panning_preset in PANNING_PRESETS else "fireflies_plus"
 
-    if preset == "phi_reference_orbit":
+    if preset == "clean_reference":
+        # Based on the cleaner second YouTube reference: ~0.129 Hz / 7.73 s
+        # orbit, tighter side/mid energy, more centered image, and less hyped
+        # air than the wider Reference Luxe profile.
+        az = base + 5.0 * np.sin(2 * np.pi * cycles_per_second * 0.25 * t) + 3.0 * np.sin(
+            2 * np.pi * cycles_per_second * 1.1 * t
+        )
+    elif preset == "phi_reference_orbit":
         # Reference Luxe translated through phi: the supplied reference's ~10.4 s
         # orbit is preserved, while small timing/position offsets are divided by
         # powers of phi so the motion never feels machine-looped.

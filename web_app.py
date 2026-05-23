@@ -281,15 +281,16 @@ HTML = """
         <h1><span class="grad">Elegant 8D masters</span> you can actually feel.</h1>
         <p class="lede">Upload a track, choose a mastering profile, and export a polished spatial mix with felt-presence panning, mono-safe bass punch, subtle room, and clean 32-bit WAV detail.</p>
         <div class="proof" aria-label="Reference mix findings">
-          <div><strong>10.4s</strong><span>Measured reference orbit — smooth enough to avoid fatigue.</span></div>
+          <div><strong>7.7s</strong><span>Clean reference orbit — tighter, centered, polished motion.</span></div>
           <div><strong>150 Hz</strong><span>Protected crossover keeps kick and sub locked center.</span></div>
-          <div><strong>0.81</strong><span>Reference median side/mid width in active sections.</span></div>
+          <div><strong>0.60</strong><span>Clean reference median side/mid width target.</span></div>
         </div>
         <div class="badges" aria-label="Processing highlights">
           <span class="badge">BPM aware</span>
           <span class="badge">Static cleanup</span>
           <span class="badge">Golden Ratio motion</span>
           <span class="badge">Fibonacci timing</span>
+          <span class="badge">Clean Reference preset</span>
           <span class="badge">Reference Luxe preset</span>
           <span class="badge">Felt-presence panning</span>
         </div>
@@ -313,7 +314,8 @@ HTML = """
             <div class="field">
               <label for="preset">Mastering profile</label>
               <select id="preset">
-                <option value="reference_luxe" selected>Reference Luxe — 10.4s orbit</option>
+                <option value="clean_reference" selected>Clean Reference — polished 7.7s orbit</option>
+                <option value="reference_luxe">Reference Luxe — 10.4s orbit</option>
                 <option value="phi_reference_orbit">Golden Ratio Reference — φ-timed orbit</option>
                 <option value="fibonacci_spiral">Fibonacci Spiral — golden-angle path</option>
                 <option value="golden_figure8">Golden Figure 8 — φ front/back sweep</option>
@@ -444,11 +446,18 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         bpm = estimate_bpm(audio)
         safe_preset = preset if preset in panning_preset_names() else "reference_luxe"
         reference_speed_presets = {"reference_luxe", "phi_reference_orbit", "fibonacci_spiral", "golden_figure8", "lucas_breath"}
-        rotation_cpm = 5.78 if safe_preset in reference_speed_presets else bpm_to_premium_rotation_cpm(bpm)
+        clean_speed_presets = {"clean_reference"}
+        if safe_preset in clean_speed_presets:
+            rotation_cpm = 7.76
+        elif safe_preset in reference_speed_presets:
+            rotation_cpm = 5.78
+        else:
+            rotation_cpm = bpm_to_premium_rotation_cpm(bpm)
         preset_settings = {
             # Mix-engineer feedback profile: keep lead/body front-center, move air,
             # guitar brightness, ambience, and generated room instead of spinning
             # the whole vocal image.
+            "clean_reference": dict(room_size=0.14, motion_depth=0.58, high_emphasis=0.42, spatial_mix=0.52, center_focus=0.84, felt_presence=0.42, denoise_amount=0.84),
             "reference_luxe": dict(room_size=0.20, motion_depth=0.74, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.72, felt_presence=0.72),
             "phi_reference_orbit": dict(room_size=0.20, motion_depth=0.72, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.74, felt_presence=0.74),
             "fibonacci_spiral": dict(room_size=0.22, motion_depth=0.78, high_emphasis=0.74, spatial_mix=0.68, center_focus=0.62, felt_presence=0.80),
@@ -463,7 +472,8 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             safe_preset,
             dict(room_size=0.20, motion_depth=0.74, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.72, felt_presence=0.72),
         )
-        settings = dict(settings, denoise_amount=0.72)
+        settings = dict(settings)
+        settings["denoise_amount"] = max(settings.get("denoise_amount", 0.0), 0.72)
         instruction_result = apply_mix_instructions(settings, mix_prompt)
         settings = instruction_result.settings
         mix_notes = " | ".join(instruction_result.notes) if instruction_result.notes else "Selected profile only"
