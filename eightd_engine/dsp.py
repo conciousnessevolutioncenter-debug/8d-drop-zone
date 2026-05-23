@@ -53,6 +53,16 @@ class CorrelationReport:
 SPEED_OF_SOUND_MPS = 343.0
 HEAD_RADIUS_METERS = 0.0875
 MAX_ITD_SECONDS = 0.00068  # practical human max: ~600-700 microseconds
+PHI = (1.0 + math.sqrt(5.0)) / 2.0
+GOLDEN_ANGLE_DEGREES = 360.0 / (PHI * PHI)  # ~137.507°, golden-angle spatial stepping
+FIBONACCI_WEIGHTS = np.array([1, 1, 2, 3, 5, 8, 13], dtype=np.float64)
+LUCAS_WEIGHTS = np.array([2, 1, 3, 4, 7, 11], dtype=np.float64)
+FIBONACCI_PRESETS = {
+    "phi_reference_orbit",
+    "fibonacci_spiral",
+    "golden_figure8",
+    "lucas_breath",
+}
 
 
 def ensure_stereo_float(samples: np.ndarray) -> np.ndarray:
@@ -472,6 +482,11 @@ def _simple_room_reverb(stereo: np.ndarray, sample_rate: int, amount: float) -> 
 
 
 PANNING_PRESETS = {
+    "reference_luxe": "Measured YouTube-reference orbit: 10.4-second sweep, wide mids/highs, protected mono bass.",
+    "phi_reference_orbit": "Golden Ratio version of the measured reference: phi-weighted timing, drift, and rear shading.",
+    "fibonacci_spiral": "Fibonacci-timed spiral that visits golden-angle spatial nodes around the listener.",
+    "golden_figure8": "Figure-eight motion whose lobes and transitions are shaped by phi ratios.",
+    "lucas_breath": "Slow Lucas/Fibonacci breathing orbit: elegant expansion-contraction with low nausea risk.",
     "fireflies_plus": "Reference-inspired smooth premium orbit with subtle organic drift.",
     "cinematic_halo": "Slow halo movement: wide, emotional, atmospheric, non-dizzy.",
     "figure8": "Figure-eight style front/back emphasis with changing side energy.",
@@ -486,6 +501,56 @@ def panning_preset_names() -> set[str]:
     return set(PANNING_PRESETS)
 
 
+def fibonacci_preset_names() -> set[str]:
+    """Return presets driven by Fibonacci/Golden Ratio motion rules."""
+
+    return set(FIBONACCI_PRESETS)
+
+
+def _smoothstep(x: np.ndarray) -> np.ndarray:
+    """Cubic ease curve used to avoid abrupt spatial acceleration changes."""
+
+    u = np.clip(x, 0.0, 1.0)
+    return u * u * (3.0 - 2.0 * u)
+
+
+def _weighted_segment_phase(phase: np.ndarray, weights: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Map a 0..1 orbit phase to Fibonacci/Lucas weighted segment index + local phase.
+
+    The sequence controls timing: short Fibonacci numbers create quick passes,
+    while later/larger numbers create long, elegant sweeps and perceptual rests.
+    """
+
+    w = np.asarray(weights, dtype=np.float64)
+    edges = np.concatenate([[0.0], np.cumsum(w / np.sum(w))])
+    idx = np.searchsorted(edges[1:], phase, side="right")
+    idx = np.clip(idx, 0, len(w) - 1)
+    local = (phase - edges[idx]) / (edges[idx + 1] - edges[idx] + 1e-12)
+    return idx, local
+
+
+def _golden_segment_orbit(
+    phase: np.ndarray,
+    weights: np.ndarray,
+    radius_degrees: float = 32.0,
+    start_degrees: float = 0.0,
+) -> np.ndarray:
+    """Continuous golden-angle spatial offset with Fibonacci/Lucas timing.
+
+    The sequence determines *when* the orbit reaches each node; the golden angle
+    determines *where* those nodes sit around the listener. Segment-to-segment
+    interpolation is eased to keep motion luxurious rather than stepped.
+    """
+
+    idx, local = _weighted_segment_phase(phase, weights)
+    eased = _smoothstep(local)
+    node = (start_degrees + idx * GOLDEN_ANGLE_DEGREES) % 360.0
+    next_node = (start_degrees + (idx + 1) * GOLDEN_ANGLE_DEGREES) % 360.0
+    delta = ((next_node - node + 180.0) % 360.0) - 180.0
+    centered = ((node + delta * eased + 180.0) % 360.0) - 180.0
+    return (centered / 180.0) * radius_degrees
+
+
 def _azimuth_series(
     num_frames: int,
     sample_rate: int,
@@ -496,10 +561,40 @@ def _azimuth_series(
 
     cycles_per_second = max(0.01, float(rotation_cpm) / 60.0)
     t = np.arange(num_frames, dtype=np.float64) / float(sample_rate)
+    orbit_phase = (t * cycles_per_second) % 1.0
     base = t * cycles_per_second * 360.0
     preset = panning_preset if panning_preset in PANNING_PRESETS else "fireflies_plus"
 
-    if preset == "cinematic_halo":
+    if preset == "phi_reference_orbit":
+        # Reference Luxe translated through phi: the supplied reference's ~10.4 s
+        # orbit is preserved, while small timing/position offsets are divided by
+        # powers of phi so the motion never feels machine-looped.
+        fib_offset = _golden_segment_orbit(orbit_phase, FIBONACCI_WEIGHTS, radius_degrees=18.0, start_degrees=21.0)
+        az = base + fib_offset + (13.0 / PHI) * np.sin(2 * np.pi * cycles_per_second * t / PHI)
+    elif preset == "fibonacci_spiral":
+        # A Fibonacci-timed spiral: each segment lasts 1,1,2,3,5,8,13 parts of
+        # the orbit and aims toward golden-angle nodes around the listener.
+        fib_offset = _golden_segment_orbit(orbit_phase, FIBONACCI_WEIGHTS, radius_degrees=46.0, start_degrees=0.0)
+        az = base * (1.0 + 1.0 / (PHI * 34.0)) + fib_offset
+    elif preset == "golden_figure8":
+        # Front/back figure-eight with phi-spaced lobes. The 90/270 side passes
+        # remain smooth, but rear/front transitions breathe at golden-ratio rates.
+        az = 180.0 + 116.0 * np.sin(2 * np.pi * orbit_phase) + (72.0 / PHI) * np.sin(
+            4 * np.pi * orbit_phase + np.pi / PHI
+        )
+    elif preset == "lucas_breath":
+        # Lucas numbers (2,1,3,4,7,11) create slower expansion/contraction than
+        # Fibonacci Spiral: refined halo movement with lower nausea risk.
+        lucas_offset = _golden_segment_orbit(orbit_phase, LUCAS_WEIGHTS, radius_degrees=28.0, start_degrees=GOLDEN_ANGLE_DEGREES / PHI)
+        breath = 1.0 + 0.18 * np.sin(2 * np.pi * orbit_phase / PHI)
+        az = base * 0.78 * breath + lucas_offset
+    elif preset == "reference_luxe":
+        # Based on the supplied reference: ~0.096 Hz / 10.4 s orbit,
+        # with broad left-right travel plus gentle non-mechanical drift.
+        az = base + 8.0 * np.sin(2 * np.pi * cycles_per_second * 0.33 * t) + 5.0 * np.sin(
+            2 * np.pi * cycles_per_second * 1.25 * t
+        )
+    elif preset == "cinematic_halo":
         # Slow emotional circle with mild non-repeating drift.
         az = base * 0.72 + 18.0 * np.sin(2 * np.pi * cycles_per_second * 0.23 * t)
     elif preset == "figure8":

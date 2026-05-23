@@ -4,6 +4,7 @@ from eightd_engine.audio_io import export_audio, load_audio
 from eightd_engine.dsp import (
     AudioData,
     bpm_to_premium_rotation_cpm,
+    fibonacci_preset_names,
     high_frequency_emphasis,
     panning_preset_names,
     preserve_loudness_and_peak,
@@ -136,12 +137,98 @@ def test_static_noise_reduction_lowers_hiss_without_erasing_music():
 
 def test_premium_panning_presets_are_available_and_distinct():
     names = panning_preset_names()
-    assert {"fireflies_plus", "cinematic_halo", "figure8", "wide_orbit", "vocal_safe"}.issubset(names)
+    assert {"fireflies_plus", "cinematic_halo", "figure8", "wide_orbit", "vocal_safe", "reference_luxe"}.issubset(names)
 
     sr = 44100
     source = np.column_stack([sine(1300, sr=sr, seconds=2.0), sine(1300, sr=sr, seconds=2.0)])
     fireflies = process_8d(AudioData(source, sr), panning_preset="fireflies_plus", room_size=0.0).samples
     figure8 = process_8d(AudioData(source, sr), panning_preset="figure8", room_size=0.0).samples
+    reference = process_8d(AudioData(source, sr), panning_preset="reference_luxe", room_size=0.0).samples
 
-    assert fireflies.shape == figure8.shape == source.shape
+    assert fireflies.shape == figure8.shape == reference.shape == source.shape
     assert rms_level(fireflies - figure8) > 1e-3
+    assert rms_level(reference - fireflies) > 1e-3
+
+
+def test_reference_luxe_mix_keeps_reference_style_width_with_safe_bass():
+    sr = 44100
+    seconds = 8.0
+    bass = sine(58, sr=sr, seconds=seconds, amp=0.42)
+    vocal = sine(920, sr=sr, seconds=seconds, amp=0.16)
+    shimmer_l = sine(6400, sr=sr, seconds=seconds, amp=0.05)
+    shimmer_r = sine(7100, sr=sr, seconds=seconds, amp=0.045)
+    source = np.column_stack([bass + vocal + shimmer_l, bass + vocal + shimmer_r])
+
+    rendered = process_8d(
+        AudioData(source, sr),
+        rotation_cpm=5.78,
+        room_size=0.22,
+        crossover_hz=150,
+        motion_depth=0.86,
+        high_emphasis=0.72,
+        spatial_mix=0.74,
+        panning_preset="reference_luxe",
+        preserve_quality=True,
+        section_automation=True,
+    ).samples
+
+    bass_band, motion_band = split_bass_motion(rendered, sr, crossover_hz=150)
+    low_side = rms_level(bass_band[:, 0] - bass_band[:, 1])
+    low_mid = rms_level(bass_band.mean(axis=1))
+    motion_side = rms_level((motion_band[:, 0] - motion_band[:, 1]) * 0.5)
+    motion_mid = rms_level((motion_band[:, 0] + motion_band[:, 1]) * 0.5)
+
+    assert low_side < low_mid * 0.05
+    assert 0.20 <= motion_side / (motion_mid + 1e-12) <= 1.20
+
+
+def test_fibonacci_golden_ratio_preset_suite_is_registered():
+    names = panning_preset_names()
+    fib_names = fibonacci_preset_names()
+
+    assert fib_names == {
+        "phi_reference_orbit",
+        "fibonacci_spiral",
+        "golden_figure8",
+        "lucas_breath",
+    }
+    assert fib_names.issubset(names)
+
+
+def test_fibonacci_presets_are_distinct_reference_width_and_bass_safe():
+    sr = 44100
+    seconds = 8.0
+    bass = sine(62, sr=sr, seconds=seconds, amp=0.38)
+    vocal = sine(880, sr=sr, seconds=seconds, amp=0.15)
+    air_l = sine(6200, sr=sr, seconds=seconds, amp=0.055)
+    air_r = sine(7600, sr=sr, seconds=seconds, amp=0.045)
+    source = np.column_stack([bass + vocal + air_l, bass + vocal + air_r])
+
+    renders = {}
+    for preset in fibonacci_preset_names():
+        rendered = process_8d(
+            AudioData(source, sr),
+            rotation_cpm=5.78,
+            room_size=0.22,
+            crossover_hz=150,
+            motion_depth=0.84,
+            high_emphasis=0.72,
+            spatial_mix=0.74,
+            panning_preset=preset,
+            preserve_quality=True,
+            section_automation=True,
+        ).samples
+        bass_band, motion_band = split_bass_motion(rendered, sr, crossover_hz=150)
+        low_side = rms_level(bass_band[:, 0] - bass_band[:, 1])
+        low_mid = rms_level(bass_band.mean(axis=1))
+        side = rms_level((motion_band[:, 0] - motion_band[:, 1]) * 0.5)
+        mid = rms_level((motion_band[:, 0] + motion_band[:, 1]) * 0.5)
+
+        assert rendered.shape == source.shape
+        assert np.max(np.abs(rendered)) <= 10 ** (-1.0 / 20.0) + 1e-12
+        assert low_side < low_mid * 0.05
+        assert 0.18 <= side / (mid + 1e-12) <= 1.25
+        renders[preset] = rendered
+
+    assert rms_level(renders["phi_reference_orbit"] - renders["fibonacci_spiral"]) > 1e-3
+    assert rms_level(renders["golden_figure8"] - renders["lucas_breath"]) > 1e-3
