@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover - environment-specific optional dependency
     TkinterDnD = None  # type: ignore[assignment]
     DND_AVAILABLE = False
 
-from .audio_io import SUPPORTED_INPUTS, export_audio, load_audio
+from .audio_io import export_audio, load_audio
 from .dsp import (
     analyze_correlation,
     bpm_to_two_bar_rotation_cpm,
@@ -54,7 +54,7 @@ class DropZoneApp(tk.Tk):
         self._busy = False
 
         self.headline = tk.StringVar(value="Drop Audio Here")
-        self.subhead = tk.StringVar(value="MP3, WAV, FLAC, OGG, AIFF, or M4A → automatic professional 8D render")
+        self.subhead = tk.StringVar(value="Drop any audio file FFmpeg/soundfile can decode → automatic professional 8D render")
         self.status = tk.StringVar(value="Ready. Drag a file onto the window.")
         self.analysis = tk.StringVar(value="Smart engine: BPM lock • 150 Hz mono bass protection • binaural orbit • YouTube-safe master")
         self.output_text = tk.StringVar(value="Output will save beside the source as *_8D_Final.wav")
@@ -244,11 +244,11 @@ class DropZoneApp(tk.Tk):
             return "copy"
         raw_data = getattr(event, "data", "")
         paths = [Path(p) for p in self.tk.splitlist(raw_data)]
-        audio_paths = [p for p in paths if p.suffix.lower() in SUPPORTED_INPUTS and p.exists()]
-        if not audio_paths:
-            self._set_error("Unsupported drop. Please drop an MP3/WAV/FLAC/OGG/AIFF/M4A audio file.")
+        existing_paths = [p for p in paths if p.exists() and p.is_file()]
+        if not existing_paths:
+            self._set_error("Unsupported drop. Please drop a real audio file; the engine will try to decode any format FFmpeg/soundfile supports.")
             return "copy"
-        self._start_conversion(audio_paths[0])
+        self._start_conversion(existing_paths[0])
         return "copy"
 
     def _start_conversion(self, input_path: Path) -> None:
@@ -323,7 +323,7 @@ class DropZoneApp(tk.Tk):
 
     def _reset_ready_state(self) -> None:
         self.headline.set("Drop Audio Here")
-        self.subhead.set("MP3, WAV, FLAC, OGG, AIFF, or M4A → automatic professional 8D render")
+        self.subhead.set("Drop any audio file FFmpeg/soundfile can decode → automatic professional 8D render")
         self.status.set("Ready. Drag a file onto the window.")
         self.analysis.set("Smart engine: BPM lock • 150 Hz mono bass protection • binaural orbit • YouTube-safe master")
         self.output_text.set("Output will save beside the source as *_8D_Final.wav")
@@ -334,7 +334,7 @@ class DropZoneApp(tk.Tk):
         self.subhead.set("Fix the issue below, then drop the file again.")
         self.status.set(message)
         self.analysis.set("No audio was exported.")
-        self.output_text.set("Supported inputs: MP3, WAV, FLAC, OGG, AIFF, M4A")
+        self.output_text.set("If FFmpeg/soundfile can decode it, the 8D engine will try it.")
         self._set_drop_colors(self.PANEL, self.ERROR)
         if self._busy:
             self._busy = False

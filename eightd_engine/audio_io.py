@@ -17,22 +17,24 @@ import numpy as np
 from .dsp import AudioData, ensure_stereo_float, normalize_peak
 
 
-SUPPORTED_INPUTS = {".wav", ".flac", ".ogg", ".aiff", ".aif", ".mp3", ".m4a"}
+COMMON_AUDIO_INPUTS = {".wav", ".flac", ".ogg", ".aiff", ".aif", ".mp3", ".m4a", ".aac", ".wma", ".opus", ".alac"}
+# Backward-compatible name used by the GUI for hints only. Decoding is no longer
+# gated by extension; load_audio tries soundfile first and then FFmpeg/pydub.
+SUPPORTED_INPUTS = COMMON_AUDIO_INPUTS
 SUPPORTED_OUTPUTS = {".wav", ".flac", ".ogg", ".mp3"}
 
 
 def load_audio(path: str | Path) -> AudioData:
     """Load an audio file as stereo float samples.
 
-    SoundFile handles lossless formats directly. Pydub is used as a fallback for
-    MP3/M4A or systems where libsndfile cannot decode a format.
+    SoundFile handles lossless formats directly. Pydub/FFmpeg is used as a
+    broad fallback for compressed or unusual containers. The function does not
+    reject by extension; it attempts to decode whatever file the user drops.
     """
 
     src = Path(path)
     if not src.exists():
         raise FileNotFoundError(src)
-    if src.suffix.lower() not in SUPPORTED_INPUTS:
-        raise ValueError(f"Unsupported input format: {src.suffix}")
 
     try:
         import soundfile as sf  # type: ignore
@@ -50,7 +52,7 @@ def load_audio(path: str | Path) -> AudioData:
             from pydub import AudioSegment  # type: ignore
         except Exception as import_error:  # pragma: no cover - environment-specific
             raise RuntimeError(
-                "Could not load audio. WAV works without extras; for MP3/M4A install "
+                "Could not load audio. WAV works without extras; for broad audio format support install "
                 "soundfile, pydub, and FFmpeg."
             ) from import_error
 
