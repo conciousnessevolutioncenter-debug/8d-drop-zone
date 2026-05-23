@@ -450,6 +450,60 @@ def reduce_static_noise(samples: np.ndarray, sample_rate: int, amount: float = 0
     return preserve_loudness_and_peak(cleaned, stereo, peak_ceiling_db=-1.0, max_rms_lift_db=0.0)
 
 
+def enhance_felt_presence(
+    bass: np.ndarray,
+    moving: np.ndarray,
+    sample_rate: int,
+    amount: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Add restrained psychoacoustic "felt" cues without breaking bass safety.
+
+    This is not a loudness hype stage. It adds two subtle layers that make the
+    8D motion easier for a headphone listener to *feel*:
+
+    1. **Pinna/air proximity cues**: a tiny delayed side copy of the 4.2 kHz+
+       band increases left/right/rear localization where human HRTFs are most
+       sensitive, while leaving the vocal/body anchor intact.
+    2. **Centered tactile punch**: a very small, mono, softly-saturated copy of
+       the 75-150 Hz upper-bass/kick region reinforces body impact without ever
+       spinning the sub or creating low-frequency side energy.
+    """
+
+    amt = float(np.clip(amount, 0.0, 1.0))
+    safe_bass = ensure_stereo_float(bass)
+    spatial = ensure_stereo_float(moving)
+    if amt <= 0.0 or len(spatial) == 0:
+        return safe_bass, spatial
+
+    enhanced = spatial.copy()
+
+    # Human front/back/height perception depends heavily on direction-dependent
+    # notches and peaks above ~4 kHz. Add a tiny decorrelated side cue in this
+    # band so the motion is more apparent but the instrument/vocal body remains
+    # attached to the center-focused source.
+    air = np.empty_like(spatial)
+    for ch in range(2):
+        _body, air[:, ch] = _fft_split_mono(spatial[:, ch], sample_rate, 4200.0)
+    air_side = (air[:, 0] - air[:, 1]) * 0.5
+    left_cue = apply_fractional_delay(air_side, sample_rate * 0.00023)
+    right_cue = apply_fractional_delay(-air_side, sample_rate * 0.00031)
+    direct_side = np.column_stack([air_side, -air_side])
+    delayed_side = np.column_stack([left_cue, right_cue])
+    enhanced += (direct_side * 0.34 + delayed_side * 0.28) * amt
+
+    # A low, mono punch layer makes the result feel physically grounded. The
+    # layer is deliberately narrow and centered, so kick/sub translation remains
+    # strong on headphones, speakers, and mono playback.
+    bass_mono = safe_bass.mean(axis=1)
+    sub, upper_bass = _fft_split_mono(bass_mono, sample_rate, 75.0)
+    _unused, punch_band = _fft_split_mono(bass_mono - sub, sample_rate, 150.0)
+    punch = np.tanh((upper_bass - punch_band) * 2.0) * 0.5
+    safe_bass = safe_bass + np.column_stack([punch, punch]) * (0.055 * amt)
+
+    return safe_bass, enhanced
+
+
+
 def _simple_room_reverb(stereo: np.ndarray, sample_rate: int, amount: float) -> np.ndarray:
     """Small synthetic room made from feedback comb delays.
 
@@ -727,6 +781,7 @@ def process_8d(
     youtube_master: bool = False,
     section_automation: bool = False,
     center_focus: float = 0.0,
+    felt_presence: float = 0.0,
 ) -> AudioData:
     """Convert a stereo track into an 8D-style headphone render."""
 
@@ -767,6 +822,7 @@ def process_8d(
         # detail, and original stereo tone are enhanced rather than hollowed out.
         dry_gain += (0.12 + 0.10 * focus) * wet
     moving = motion * dry_gain + center_anchor + moving * wet
+    bass, moving = enhance_felt_presence(bass, moving, audio.sample_rate, amount=felt_presence)
     mixed = bass + moving + room
     if youtube_master:
         mixed = apply_youtube_master_target(mixed, target_rms_db=-13.0, peak_ceiling_db=-1.0)

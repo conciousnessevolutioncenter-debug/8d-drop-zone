@@ -97,6 +97,14 @@ def apply_mix_instructions(base_settings: dict, prompt: str = "") -> MixInstruct
         settings["high_emphasis"] = max(settings.get("high_emphasis", 0.6), 0.74)
         add_note("Spatial orbit made wider and more dramatic while bass remains protected.")
 
+    if any(term in text for term in ("felt", "feel", "feels", "physical", "body", "tactile", "immersive", "deep", "presence", "impact")):
+        settings["felt_presence"] = max(settings.get("felt_presence", 0.62), 0.88)
+        settings["high_emphasis"] = max(settings.get("high_emphasis", 0.6), 0.76)
+        settings["motion_depth"] = max(settings.get("motion_depth", 0.7), 0.80)
+        settings["spatial_mix"] = max(settings.get("spatial_mix", 0.6), 0.70)
+        settings["room_size"] = max(settings.get("room_size", 0.18), 0.22)
+        add_note("Felt-presence layer enabled: stronger pinna/air motion plus centered tactile punch.")
+
     if any(term in text for term in ("less reverb", "dry", "drier", "less room", "reduce room")):
         settings["room_size"] = min(settings.get("room_size", 0.18), 0.10)
         add_note("Room/reverb reduced for a drier, more direct master.")
@@ -108,7 +116,7 @@ def apply_mix_instructions(base_settings: dict, prompt: str = "") -> MixInstruct
         settings["denoise_amount"] = max(settings.get("denoise_amount", 0.72), 0.82)
         add_note("Static/hiss cleanup increased before spatialization.")
 
-    for key in ("room_size", "motion_depth", "high_emphasis", "spatial_mix", "center_focus", "denoise_amount"):
+    for key in ("room_size", "motion_depth", "high_emphasis", "spatial_mix", "center_focus", "denoise_amount", "felt_presence"):
         if key in settings:
             settings[key] = _clamp01(settings[key])
 
@@ -270,8 +278,8 @@ HTML = """
     <section class="hero">
       <div class="copy">
         <div class="eyebrow"><span class="pulse"></span> Professional headphone-first render</div>
-        <h1><span class="grad">Elegant 8D masters</span> with a stable low end.</h1>
-        <p class="lede">Upload a track, choose a mastering profile, and export a polished spatial mix with reference-style movement, mono-safe bass, subtle room, and clean 32-bit WAV detail.</p>
+        <h1><span class="grad">Elegant 8D masters</span> you can actually feel.</h1>
+        <p class="lede">Upload a track, choose a mastering profile, and export a polished spatial mix with felt-presence panning, mono-safe bass punch, subtle room, and clean 32-bit WAV detail.</p>
         <div class="proof" aria-label="Reference mix findings">
           <div><strong>10.4s</strong><span>Measured reference orbit — smooth enough to avoid fatigue.</span></div>
           <div><strong>150 Hz</strong><span>Protected crossover keeps kick and sub locked center.</span></div>
@@ -283,6 +291,7 @@ HTML = """
           <span class="badge">Golden Ratio motion</span>
           <span class="badge">Fibonacci timing</span>
           <span class="badge">Reference Luxe preset</span>
+          <span class="badge">Felt-presence panning</span>
         </div>
       </div>
       <div id="zone">
@@ -320,8 +329,8 @@ HTML = """
           </div>
           <div class="prompt-box">
             <label for="mixPrompt">Mix instruction chat</label>
-            <textarea id="mixPrompt" placeholder="Example: Keep the vocal front-center, keep drums static, make guitar echoes wider, less reverb."></textarea>
-            <p class="prompt-help">Prompt the spatial renderer before upload. Current master-file controls can anchor vocal/body, protect bass/drums, widen guitars/ambience/highs, adjust room, cleanup, and overall motion.</p>
+            <textarea id="mixPrompt" placeholder="Example: Make the 8D felt by the listener, Keep the vocal front-center, keep drums static, make guitar echoes wider."></textarea>
+            <p class="prompt-help">Prompt the spatial renderer before upload. Current master-file controls can anchor vocal/body, protect bass/drums, widen guitars/ambience/highs, add felt-presence panning, adjust room, cleanup, and overall motion.</p>
           </div>
           <input id="file" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.aiff">
           <div class="bar" id="bar"><div class="fill"></div></div>
@@ -333,7 +342,7 @@ HTML = """
       <div><strong>64-bit DSP</strong><span>High precision internal processing before export.</span></div>
       <div><strong>Mono-safe bass</strong><span>Sub and kick remain centered below 150 Hz.</span></div>
       <div><strong>Binaural orbit</strong><span>ITD, ILD, rear shading, and smooth azimuth motion.</span></div>
-      <div><strong>Cinematic room</strong><span>Subtle wet reflections support externalization.</span></div>
+      <div><strong>Felt presence</strong><span>Pinna-air cues and centered tactile punch make motion more perceivable.</span></div>
       <div><strong>32-bit WAV</strong><span>Float export keeps detail and avoids brittle renders.</span></div>
     </section>
   </main>
@@ -440,19 +449,19 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             # Mix-engineer feedback profile: keep lead/body front-center, move air,
             # guitar brightness, ambience, and generated room instead of spinning
             # the whole vocal image.
-            "reference_luxe": dict(room_size=0.20, motion_depth=0.72, high_emphasis=0.68, spatial_mix=0.62, center_focus=0.72),
-            "phi_reference_orbit": dict(room_size=0.20, motion_depth=0.70, high_emphasis=0.68, spatial_mix=0.62, center_focus=0.74),
-            "fibonacci_spiral": dict(room_size=0.22, motion_depth=0.76, high_emphasis=0.72, spatial_mix=0.66, center_focus=0.62),
-            "golden_figure8": dict(room_size=0.18, motion_depth=0.70, high_emphasis=0.66, spatial_mix=0.60, center_focus=0.70),
-            "lucas_breath": dict(room_size=0.24, motion_depth=0.62, high_emphasis=0.62, spatial_mix=0.58, center_focus=0.78),
-            "wide_orbit": dict(room_size=0.18, motion_depth=0.78, high_emphasis=0.66, spatial_mix=0.66, center_focus=0.50),
-            "vocal_safe": dict(room_size=0.14, motion_depth=0.48, high_emphasis=0.48, spatial_mix=0.46, center_focus=0.88),
-            "cinematic_halo": dict(room_size=0.22, motion_depth=0.64, high_emphasis=0.60, spatial_mix=0.58, center_focus=0.74),
-            "figure8": dict(room_size=0.16, motion_depth=0.68, high_emphasis=0.60, spatial_mix=0.58, center_focus=0.66),
+            "reference_luxe": dict(room_size=0.20, motion_depth=0.74, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.72, felt_presence=0.72),
+            "phi_reference_orbit": dict(room_size=0.20, motion_depth=0.72, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.74, felt_presence=0.74),
+            "fibonacci_spiral": dict(room_size=0.22, motion_depth=0.78, high_emphasis=0.74, spatial_mix=0.68, center_focus=0.62, felt_presence=0.80),
+            "golden_figure8": dict(room_size=0.18, motion_depth=0.72, high_emphasis=0.68, spatial_mix=0.62, center_focus=0.70, felt_presence=0.74),
+            "lucas_breath": dict(room_size=0.24, motion_depth=0.64, high_emphasis=0.64, spatial_mix=0.60, center_focus=0.78, felt_presence=0.68),
+            "wide_orbit": dict(room_size=0.20, motion_depth=0.82, high_emphasis=0.72, spatial_mix=0.70, center_focus=0.50, felt_presence=0.84),
+            "vocal_safe": dict(room_size=0.14, motion_depth=0.50, high_emphasis=0.52, spatial_mix=0.48, center_focus=0.88, felt_presence=0.56),
+            "cinematic_halo": dict(room_size=0.24, motion_depth=0.68, high_emphasis=0.66, spatial_mix=0.62, center_focus=0.74, felt_presence=0.74),
+            "figure8": dict(room_size=0.18, motion_depth=0.72, high_emphasis=0.66, spatial_mix=0.62, center_focus=0.66, felt_presence=0.76),
         }
         settings = preset_settings.get(
             safe_preset,
-            dict(room_size=0.18, motion_depth=0.68, high_emphasis=0.62, spatial_mix=0.58, center_focus=0.72),
+            dict(room_size=0.20, motion_depth=0.74, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.72, felt_presence=0.72),
         )
         settings = dict(settings, denoise_amount=0.72)
         instruction_result = apply_mix_instructions(settings, mix_prompt)
@@ -481,6 +490,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             youtube_master=False,
             section_automation=True,
             center_focus=settings["center_focus"],
+            felt_presence=settings["felt_presence"],
         )
         _set_job(job_id, message="Writing WAV export…")
         report = analyze_correlation(rendered.samples)

@@ -50,3 +50,17 @@ def test_mix_prompt_supports_drier_subtle_renders_and_clamps_values():
     assert result.settings["room_size"] <= 0.10
     assert result.settings["denoise_amount"] >= 0.82
     assert all(0.0 <= result.settings[k] <= 1.0 for k in ["room_size", "motion_depth", "high_emphasis", "spatial_mix", "center_focus", "denoise_amount"])
+
+
+def test_mix_prompt_supports_felt_physical_immersive_renders():
+    module = load_live_module()
+    base = dict(room_size=0.20, motion_depth=0.72, high_emphasis=0.68, spatial_mix=0.62, center_focus=0.72, denoise_amount=0.72, felt_presence=0.62)
+
+    result = module.apply_mix_instructions(base, "Make the 8D felt by the listener: physical, immersive, powerful, but keep bass centered")
+
+    assert result.settings["felt_presence"] >= 0.88
+    assert result.settings["high_emphasis"] >= 0.76
+    assert result.settings["motion_depth"] >= 0.80
+    assert result.settings["spatial_mix"] >= 0.70
+    assert any("felt" in note.lower() or "presence" in note.lower() for note in result.notes)
+    assert any("Low end" in note for note in result.notes)
