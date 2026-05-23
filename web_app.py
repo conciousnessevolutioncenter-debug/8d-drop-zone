@@ -65,7 +65,7 @@ HTML = """
       <div class="bar" id="bar"><div class="fill"></div></div>
       <div class="status" id="status">Ready.</div>
     </div>
-    <div class="footer">Premium signal chain: 64-bit float DSP → 150 Hz mono bass protection → clarity-preserving mid/high binaural orbit with ITD/ILD/rear shading → subtle cinematic room → quality guard/no clipping → 32-bit float WAV export.</div>
+    <div class="footer">Premium signal chain: 64-bit float DSP → 150 Hz mono bass protection → coherent high-frequency spatial cues kept attached to the musical body → mid/high binaural orbit with ITD/ILD/rear shading → subtle cinematic room → quality guard/no clipping → 32-bit float WAV export.</div>
   </div>
 <script>
 const zone = document.getElementById('zone');
@@ -167,7 +167,7 @@ def _process_job(job_id: str, src: Path, out: Path):
             room_size=0.18,
             crossover_hz=150.0,
             motion_depth=0.78,
-            high_emphasis=0.25,
+            high_emphasis=0.65,
             spatial_mix=0.68,
             preserve_quality=True,
             youtube_master=False,

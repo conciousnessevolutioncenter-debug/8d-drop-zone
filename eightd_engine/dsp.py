@@ -357,8 +357,12 @@ def high_frequency_emphasis(
 
     emphasized = np.empty_like(stereo)
     for ch in range(2):
-        low, high = _fft_split_mono(stereo[:, ch], sample_rate, split_hz)
-        emphasized[:, ch] = low * (1.0 - 0.25 * amt) + high * (1.0 + 0.15 * amt)
+        _low, high = _fft_split_mono(stereo[:, ch], sample_rate, split_hz)
+        # Add a controlled copy of the air/detail band instead of turning the
+        # lower musical body down. This keeps a synth/vocal/guitar coherent as
+        # one object while giving the binaural orbit more spectral information
+        # for rear/height perception.
+        emphasized[:, ch] = stereo[:, ch] + high * (0.18 * amt)
     return emphasized
 
 

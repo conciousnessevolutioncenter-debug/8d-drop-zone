@@ -4,6 +4,7 @@ from eightd_engine.audio_io import export_audio, load_audio
 from eightd_engine.dsp import (
     AudioData,
     bpm_to_premium_rotation_cpm,
+    high_frequency_emphasis,
     preserve_loudness_and_peak,
     process_8d,
     rms_level,
@@ -90,3 +91,22 @@ def test_wav_export_uses_high_resolution_float_for_detail_preservation(tmp_path)
 
     assert loaded.sample_rate == sr
     assert np.max(np.abs(loaded.samples - samples)) < 1e-8
+
+
+def test_high_frequency_focus_adds_air_cues_without_thinning_midrange_root():
+    sr = 44100
+    mid_root = sine(650, sr=sr, seconds=2.0, amp=0.28)
+    air_detail = sine(7200, sr=sr, seconds=2.0, amp=0.035)
+    source = np.column_stack([mid_root + air_detail, mid_root + air_detail])
+
+    focused = high_frequency_emphasis(source, sr, amount=0.8, split_hz=4000)
+    low_original, high_original = split_bass_motion(source, sr, crossover_hz=4000)
+    low_focused, high_focused = split_bass_motion(focused, sr, crossover_hz=4000)
+
+    low_change_db = 20 * np.log10((rms_level(low_focused) + 1e-12) / (rms_level(low_original) + 1e-12))
+    high_change_db = 20 * np.log10((rms_level(high_focused) + 1e-12) / (rms_level(high_original) + 1e-12))
+
+    # The root/body of a synth, vocal, or guitar should stay essentially intact.
+    assert abs(low_change_db) < 0.35
+    # The air/detail band gets extra cue energy for rear/height perception.
+    assert high_change_db > 0.7
