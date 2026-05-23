@@ -6,6 +6,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
+from dataclasses import dataclass
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -22,6 +23,98 @@ EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 app = FastAPI(title="The 8D Engine")
 app.mount("/files", StaticFiles(directory=str(APP_DIR)), name="files")
+
+
+@dataclass(frozen=True)
+class MixInstructionResult:
+    """Deterministic interpretation of user mix-refinement prompts.
+
+    This intentionally stays local/no-LLM so the render is fast, repeatable, and
+    private. It maps mix-engineer language to the parameters available in the
+    current master-file DSP pipeline.
+    """
+
+    settings: dict
+    notes: list[str]
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def apply_mix_instructions(base_settings: dict, prompt: str = "") -> MixInstructionResult:
+    """Map natural-language mix instructions to spatial-render parameters.
+
+    Supported examples:
+    - "keep the vocal center/front"
+    - "less movement, more subtle"
+    - "make the guitar more spatial"
+    - "less reverb" / "bigger room"
+    - "more dramatic 8D"
+
+    Because uploads are finished stereo masters, element-specific control is
+    approximate: vocals/body are handled by center-focus band anchoring, bass is
+    already mono-safe, and guitars/ambience/highs are pushed via high emphasis.
+    """
+
+    settings = dict(base_settings)
+    notes: list[str] = []
+    text = " ".join((prompt or "").lower().split())
+    if not text:
+        return MixInstructionResult(settings=settings, notes=notes)
+
+    def add_note(note: str):
+        if note not in notes:
+            notes.append(note)
+
+    vocal_terms = ("vocal", "voice", "lead", "singer", "lyrics", "lyric")
+    center_terms = ("center", "centre", "front", "fixed", "still", "static", "anchor", "anchored", "one position", "without motion", "no motion")
+    if any(term in text for term in vocal_terms) and any(term in text for term in center_terms):
+        settings["center_focus"] = max(settings.get("center_focus", 0.0), 0.90)
+        settings["motion_depth"] = min(settings.get("motion_depth", 0.7), 0.56)
+        settings["spatial_mix"] = min(settings.get("spatial_mix", 0.6), 0.52)
+        add_note("Lead vocal/body anchored front-center; motion shifted toward highs, reverb, and ambience.")
+
+    if any(term in text for term in ("bass", "sub", "kick", "808", "low end", "low-end", "drums", "drum")) and any(term in text for term in center_terms):
+        add_note("Low end/kick remain mono center below 150 Hz.")
+
+    if any(term in text for term in ("guitar", "guitars", "harmony", "harmonies", "delay", "echo", "echoes", "reverb tail", "ambience", "ambient", "background")):
+        if any(term in text for term in ("move", "moving", "spatial", "around", "wide", "wider", "surround", "8d")):
+            settings["high_emphasis"] = max(settings.get("high_emphasis", 0.6), 0.78)
+            settings["room_size"] = max(settings.get("room_size", 0.18), 0.23)
+            settings["spatial_mix"] = max(settings.get("spatial_mix", 0.58), 0.66)
+            add_note("Guitar/ambience/high-detail material given stronger spatial motion.")
+
+    if any(term in text for term in ("less movement", "less motion", "subtle", "gentle", "not too much", "reduce motion", "calmer")):
+        settings["motion_depth"] = min(settings.get("motion_depth", 0.7), 0.55)
+        settings["spatial_mix"] = min(settings.get("spatial_mix", 0.6), 0.52)
+        settings["center_focus"] = max(settings.get("center_focus", 0.0), 0.78)
+        add_note("Overall orbit restrained for a subtler, less seasick render.")
+
+    if any(term in text for term in ("more movement", "more motion", "dramatic", "powerful", "stronger 8d", "more 8d", "wider", "wide")):
+        settings["motion_depth"] = max(settings.get("motion_depth", 0.7), 0.82)
+        settings["spatial_mix"] = max(settings.get("spatial_mix", 0.6), 0.72)
+        settings["high_emphasis"] = max(settings.get("high_emphasis", 0.6), 0.74)
+        add_note("Spatial orbit made wider and more dramatic while bass remains protected.")
+
+    if any(term in text for term in ("less reverb", "dry", "drier", "less room", "reduce room")):
+        settings["room_size"] = min(settings.get("room_size", 0.18), 0.10)
+        add_note("Room/reverb reduced for a drier, more direct master.")
+    elif any(term in text for term in ("more reverb", "bigger room", "larger room", "more room", "wet", "wetter", "space", "spacious")):
+        settings["room_size"] = max(settings.get("room_size", 0.18), 0.30)
+        add_note("Room/reflection amount increased for more externalized space.")
+
+    if any(term in text for term in ("clean", "remove static", "less static", "hiss", "noise")):
+        settings["denoise_amount"] = max(settings.get("denoise_amount", 0.72), 0.82)
+        add_note("Static/hiss cleanup increased before spatialization.")
+
+    for key in ("room_size", "motion_depth", "high_emphasis", "spatial_mix", "center_focus", "denoise_amount"):
+        if key in settings:
+            settings[key] = _clamp01(settings[key])
+
+    if not notes:
+        add_note("Prompt saved with this render; no specific DSP keyword override was detected, so the selected profile was used.")
+    return MixInstructionResult(settings=settings, notes=notes)
 
 HTML = """
 <!doctype html>
@@ -126,9 +219,14 @@ HTML = """
     .controls { display:grid; grid-template-columns: 1fr auto; gap:12px; align-items:end; margin-top:24px; }
     .field { text-align:left; }
     label { display:block; color:var(--soft); font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin:0 0 8px 2px; }
-    select, button { font: inherit; }
+    select, button, textarea { font: inherit; }
     select { width:100%; min-height:52px; padding:0 42px 0 16px; border:1px solid var(--line); border-radius:14px; background:rgba(4,7,15,.72); color:var(--ink); font-weight:650; outline:none; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
     select:focus { border-color:rgba(203,183,251,.7); box-shadow:0 0 0 4px rgba(203,183,251,.12); }
+    textarea { width:100%; min-height:104px; resize:vertical; padding:14px 16px; border:1px solid var(--line); border-radius:16px; background:rgba(4,7,15,.72); color:var(--ink); outline:none; line-height:1.45; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+    textarea:focus { border-color:rgba(118,215,255,.72); box-shadow:0 0 0 4px rgba(118,215,255,.10); }
+    textarea::placeholder { color:rgba(222,229,240,.48); }
+    .prompt-box { margin-top:14px; text-align:left; }
+    .prompt-help { margin:8px 0 0 2px; color:var(--soft); font-size:12px; line-height:1.45; }
     button { min-height:52px; padding:0 20px; border:0; border-radius:14px; background:var(--cream); color:#111827; font-weight:800; cursor:pointer; white-space:nowrap; box-shadow:0 18px 50px rgba(233,229,221,.12); transition:transform .18s ease, filter .18s ease; }
     button:hover { transform:translateY(-1px); filter:brightness(1.04); }
     input { display:none; }
@@ -220,6 +318,11 @@ HTML = """
             </div>
             <button onclick="document.getElementById('file').click()">Select Track</button>
           </div>
+          <div class="prompt-box">
+            <label for="mixPrompt">Mix instruction chat</label>
+            <textarea id="mixPrompt" placeholder="Example: Keep the vocal front-center, keep drums static, make guitar echoes wider, less reverb."></textarea>
+            <p class="prompt-help">Prompt the spatial renderer before upload. Current master-file controls can anchor vocal/body, protect bass/drums, widen guitars/ambience/highs, adjust room, cleanup, and overall motion.</p>
+          </div>
           <input id="file" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.aiff">
           <div class="bar" id="bar"><div class="fill"></div></div>
           <div class="status-card"><div class="status" id="status">Ready for upload.</div></div>
@@ -242,6 +345,7 @@ const hint = document.getElementById('hint');
 const statusEl = document.getElementById('status');
 const bar = document.getElementById('bar');
 const preset = document.getElementById('preset');
+const mixPrompt = document.getElementById('mixPrompt');
 
 ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('hover'); title.textContent='Release to master'; }));
 ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('hover'); if (!file.files.length) title.textContent='Drop your track here'; }));
@@ -258,6 +362,7 @@ async function upload(f) {
   const data = new FormData();
   data.append('file', f);
   data.append('preset', preset.value);
+  data.append('mix_prompt', mixPrompt.value.trim());
   try {
     const json = await xhrUpload('/convert', data, pct => {
       statusEl.textContent = `Uploading: ${pct}%`;
@@ -300,7 +405,7 @@ async function pollJob(jobId) {
     if (job.status === 'complete') {
       title.textContent = 'Spatial master ready';
       hint.innerHTML = `<a href="${job.download_url}" download>Download ${job.output_name}</a>`;
-      statusEl.textContent = `Profile: ${job.preset}\nBPM: ${job.bpm}\nOrbit: ${job.rotation_cpm} cycles/min\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
+      statusEl.textContent = `Profile: ${job.preset}\nPrompt: ${job.mix_notes || 'Selected profile only'}\nBPM: ${job.bpm}\nOrbit: ${job.rotation_cpm} cycles/min\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
       return;
     }
     if (job.status === 'failed') throw new Error(job.error || 'Render failed');
@@ -323,7 +428,7 @@ def _set_job(job_id: str, **updates):
         job.update(updates)
         job["updated_at"] = time.time()
 
-def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe"):
+def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = ""):
     try:
         _set_job(job_id, status="processing", message="Analyzing BPM…")
         audio = load_audio(src)
@@ -349,12 +454,18 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             safe_preset,
             dict(room_size=0.18, motion_depth=0.68, high_emphasis=0.62, spatial_mix=0.58, center_focus=0.72),
         )
+        settings = dict(settings, denoise_amount=0.72)
+        instruction_result = apply_mix_instructions(settings, mix_prompt)
+        settings = instruction_result.settings
+        mix_notes = " | ".join(instruction_result.notes) if instruction_result.notes else "Selected profile only"
         _set_job(
             job_id,
             message="Cleaning static, then rendering premium spatial master…",
             bpm=round(bpm, 1),
             rotation_cpm=round(rotation_cpm, 2),
             preset=safe_preset,
+            mix_prompt=mix_prompt,
+            mix_notes=mix_notes,
         )
         rendered = process_8d(
             audio,
@@ -364,7 +475,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             motion_depth=settings["motion_depth"],
             high_emphasis=settings["high_emphasis"],
             spatial_mix=settings["spatial_mix"],
-            denoise_amount=0.72,
+            denoise_amount=settings["denoise_amount"],
             panning_preset=safe_preset,
             preserve_quality=True,
             youtube_master=False,
@@ -386,12 +497,15 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             side_mid_ratio=round(report.side_mid_ratio, 3),
             phase="phase warning" if report.phase_warning else "phase safe",
             preset=safe_preset,
+            mix_prompt=mix_prompt,
+            mix_notes=mix_notes,
+            settings={k: round(float(v), 3) for k, v in settings.items()},
         )
     except Exception as exc:
         _set_job(job_id, status="failed", message="Render failed.", error=str(exc))
 
 @app.post("/convert")
-async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe")):
+async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe"), mix_prompt: str = Form("")):
     suffix = Path(file.filename or "audio").suffix.lower() or ".audio"
     safe_stem = Path(file.filename or "audio").stem.replace("/", "_").replace("\\", "_")[:80]
     job_id = uuid.uuid4().hex[:12]
@@ -400,8 +514,8 @@ async def convert(file: UploadFile = File(...), preset: str = Form("reference_lu
     with src.open("wb") as f:
         while chunk := await file.read(1024 * 1024):
             f.write(chunk)
-    _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name)
-    EXECUTOR.submit(_process_job, job_id, src, out, preset)
+    _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name, mix_prompt=mix_prompt)
+    EXECUTOR.submit(_process_job, job_id, src, out, preset, mix_prompt)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing", "message": "Upload accepted. DSP render started."})
 
 @app.get("/jobs/{job_id}")

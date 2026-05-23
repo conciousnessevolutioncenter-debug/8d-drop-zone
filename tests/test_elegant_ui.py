@@ -39,3 +39,13 @@ def test_ui_exposes_reference_luxe_preset_and_signal_chain_badges():
     assert "Mono-safe bass" in html
     assert "Binaural orbit" in html
     assert "32-bit WAV" in html
+
+
+def test_ui_exposes_chat_prompt_for_spatial_refinement():
+    module = load_live_module()
+    html = module.HTML
+
+    assert "Mix instruction chat" in html
+    assert 'id="mixPrompt"' in html
+    assert "Keep the vocal front-center" in html
+    assert "data.append('mix_prompt'" in html
