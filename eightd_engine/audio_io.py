@@ -109,7 +109,7 @@ def export_audio(audio: AudioData, path: str | Path) -> Path:
             return dst
         raise RuntimeError("Export requires soundfile. Install with: pip install soundfile") from import_error
 
-    subtype = "PCM_16" if suffix == ".wav" else None
+    subtype = "FLOAT" if suffix == ".wav" else None
     sf.write(str(dst), samples, audio.sample_rate, subtype=subtype)
     return dst
 

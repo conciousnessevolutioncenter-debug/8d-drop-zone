@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from eightd_engine.audio_io import export_audio, load_audio
-from eightd_engine.dsp import analyze_correlation, bpm_to_two_bar_rotation_cpm, estimate_bpm, process_8d
+from eightd_engine.dsp import analyze_correlation, bpm_to_premium_rotation_cpm, estimate_bpm, process_8d
 
 APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,7 @@ HTML = """
       <div class="bar" id="bar"><div class="fill"></div></div>
       <div class="status" id="status">Ready.</div>
     </div>
-    <div class="footer">Signal chain: stereo input → 150 Hz crossover → mono/static bass → mid/high binaural orbit with ITD/ILD/rear shading → room reflections → -13 dB RMS target → WAV export.</div>
+    <div class="footer">Premium signal chain: 64-bit float DSP → 150 Hz mono bass protection → clarity-preserving mid/high binaural orbit with ITD/ILD/rear shading → subtle cinematic room → quality guard/no clipping → 32-bit float WAV export.</div>
   </div>
 <script>
 const zone = document.getElementById('zone');
@@ -159,16 +159,18 @@ def _process_job(job_id: str, src: Path, out: Path):
         _set_job(job_id, status="processing", message="Analyzing BPM…")
         audio = load_audio(src)
         bpm = estimate_bpm(audio)
-        rotation_cpm = bpm_to_two_bar_rotation_cpm(bpm)
+        rotation_cpm = bpm_to_premium_rotation_cpm(bpm)
         _set_job(job_id, message="Rendering 8D orbit…", bpm=round(bpm, 1), rotation_cpm=round(rotation_cpm, 2))
         rendered = process_8d(
             audio,
             rotation_cpm=rotation_cpm,
-            room_size=0.22,
+            room_size=0.18,
             crossover_hz=150.0,
-            motion_depth=1.05,
-            high_emphasis=0.45,
-            youtube_master=True,
+            motion_depth=0.78,
+            high_emphasis=0.25,
+            spatial_mix=0.68,
+            preserve_quality=True,
+            youtube_master=False,
             section_automation=True,
         )
         _set_job(job_id, message="Writing WAV export…")

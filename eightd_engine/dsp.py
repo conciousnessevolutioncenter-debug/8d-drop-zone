@@ -146,6 +146,37 @@ def apply_youtube_master_target(
     return normalize_peak(gained, ceiling=ceiling)
 
 
+def preserve_loudness_and_peak(
+    processed: np.ndarray,
+    reference: np.ndarray,
+    peak_ceiling_db: float = -1.0,
+    max_rms_lift_db: float = 0.25,
+) -> np.ndarray:
+    """Keep the rendered signal clean, unclipped, and close to source loudness.
+
+    This is a quality guard, not a compressor/limiter. It applies one static gain
+    for the whole file so the export does not become louder than the original by
+    more than a tiny allowance and never exceeds the requested peak ceiling. It
+    preserves musical dynamics because it does not change gain over time.
+    """
+
+    out = ensure_stereo_float(processed)
+    ref = ensure_stereo_float(reference)
+    if len(out) == 0:
+        return out
+
+    peak_ceiling = db_to_linear(peak_ceiling_db)
+    peak = float(np.max(np.abs(out))) if out.size else 0.0
+    peak_gain = (peak_ceiling / peak) if peak > peak_ceiling and peak > 0.0 else 1.0
+
+    ref_rms = rms_level(ref)
+    out_rms = rms_level(out)
+    max_rms = ref_rms * db_to_linear(max_rms_lift_db)
+    rms_gain = (max_rms / out_rms) if out_rms > max_rms and out_rms > 0.0 else 1.0
+
+    return out * min(peak_gain, rms_gain, 1.0)
+
+
 def estimate_bpm(audio: AudioData, fallback_bpm: float = 120.0) -> float:
     """Estimate tempo in beats per minute for automatic 8D beat-locking.
 
@@ -179,6 +210,18 @@ def bpm_to_two_bar_rotation_cpm(bpm: float, beats_per_bar: int = 4) -> float:
 
     safe_bpm = float(np.clip(bpm, 40.0, 220.0))
     return safe_bpm / float(max(1, beats_per_bar * 2))
+
+
+def bpm_to_premium_rotation_cpm(bpm: float, beats_per_bar: int = 4) -> float:
+    """Convert tempo to a smooth premium 8D orbit rate.
+
+    The premium default is one full orbit every four bars. At 120 BPM this is an
+    8-second rotation: immersive and clearly moving, but far less dizzying than
+    the two-bar/4-second novelty setting.
+    """
+
+    safe_bpm = float(np.clip(bpm, 40.0, 220.0))
+    return safe_bpm / float(max(1, beats_per_bar * 4))
 
 
 def _fft_split_mono(mono: np.ndarray, sample_rate: int, crossover_hz: float) -> Tuple[np.ndarray, np.ndarray]:
@@ -446,6 +489,8 @@ def process_8d(
     crossover_hz: float = 150.0,
     motion_depth: float = 1.0,
     high_emphasis: float = 0.0,
+    spatial_mix: float = 1.0,
+    preserve_quality: bool = False,
     youtube_master: bool = False,
     section_automation: bool = False,
 ) -> AudioData:
@@ -464,9 +509,19 @@ def process_8d(
     )
     room_curve = automation[:, None] if automation is not None else 1.0
     room = _simple_room_reverb(moving, audio.sample_rate, room_size) * room_curve
+    wet = float(np.clip(spatial_mix, 0.0, 1.0))
+    dry_gain = 1.0 - wet
+    if preserve_quality:
+        # Keep a quiet unspatialized mid/high "clarity bed" under the orbit so
+        # vocals, transient detail, and original stereo tone are enhanced rather
+        # than hollowed out by the mono moving object.
+        dry_gain += 0.12 * wet
+    moving = motion * dry_gain + moving * wet
     mixed = bass + moving + room
     if youtube_master:
         mixed = apply_youtube_master_target(mixed, target_rms_db=-13.0, peak_ceiling_db=-1.0)
+    elif preserve_quality:
+        mixed = preserve_loudness_and_peak(mixed, samples, peak_ceiling_db=-1.0, max_rms_lift_db=0.25)
     else:
         mixed = normalize_peak(mixed, ceiling=0.98)
     return AudioData(samples=mixed, sample_rate=audio.sample_rate)
