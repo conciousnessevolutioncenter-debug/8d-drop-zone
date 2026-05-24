@@ -112,7 +112,30 @@ def test_ai_stem_mode_uses_separation_and_stem_renderer(monkeypatch, tmp_path):
     assert calls == {'separate': 1, 'stem_render': 1, 'classic': 0}
 
 
-def test_homepage_exposes_ai_stem_mode_choice():
+def test_rejects_uploaded_tracks_longer_than_20_minutes(monkeypatch, tmp_path):
+    module = load_live_module()
+    module.APP_DIR = tmp_path
+    module.JOBS.clear()
+    src = tmp_path / 'long_song.wav'
+    out = tmp_path / 'long_song_8D_Final.wav'
+    src.write_bytes(b'fake')
+    long_audio = AudioData(samples=np.zeros((module.MAX_UPLOAD_SECONDS * 1000 + 1, 2), dtype=float), sample_rate=1000)
+    calls = {'process': 0, 'export': 0}
+
+    monkeypatch.setattr(module, 'load_audio', lambda _path: long_audio)
+    monkeypatch.setattr(module, 'process_8d', lambda audio, **_kwargs: calls.__setitem__('process', calls['process'] + 1) or audio)
+    monkeypatch.setattr(module, 'export_audio', lambda _audio, path: calls.__setitem__('export', calls['export'] + 1))
+
+    module._process_job('job-too-long', src, out)
+
+    payload = module.JOBS['job-too-long']
+    assert payload['status'] == 'failed'
+    assert '20 minutes' in payload['error']
+    assert calls == {'process': 0, 'export': 0}
+
+
+def test_homepage_exposes_ai_stem_mode_choice_and_20_minute_limit():
     module = load_live_module()
     assert 'AI stem spatial mix' in module.HTML
     assert 'stemMode' in module.HTML
+    assert '20 minutes max' in module.HTML

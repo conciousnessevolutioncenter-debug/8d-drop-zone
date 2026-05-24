@@ -24,6 +24,8 @@ from eightd_engine.stems import (
 
 APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_SECONDS = 20 * 60
+MAX_UPLOAD_MINUTES = MAX_UPLOAD_SECONDS // 60
 JOBS = {}
 JOBS_LOCK = Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -316,7 +318,7 @@ HTML = """
         <div class="zone-copy">
           <div class="kicker">Import audio</div>
           <div class="title" id="title">Drop your track here</div>
-          <div class="hint" id="hint">We analyze tempo and render a premium binaural orbit while keeping the sub-bass and kick centered. MP3, WAV, FLAC, M4A, and most FFmpeg-decodable files are accepted.</div>
+          <div class="hint" id="hint">We analyze tempo and render a premium binaural orbit while keeping the sub-bass and kick centered. 20 minutes max per upload. MP3, WAV, FLAC, M4A, and most FFmpeg-decodable files are accepted.</div>
           <div class="controls">
             <div class="field">
               <label for="preset">Mastering profile</label>
@@ -459,6 +461,12 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
     try:
         _set_job(job_id, status="processing", message="Analyzing BPM…")
         audio = load_audio(src)
+        duration_seconds = len(audio.samples) / float(audio.sample_rate or 1)
+        if duration_seconds > MAX_UPLOAD_SECONDS:
+            raise ValueError(
+                f"Track is {duration_seconds / 60.0:.1f} minutes long. "
+                f"Please upload songs {MAX_UPLOAD_MINUTES} minutes or shorter."
+            )
         bpm = estimate_bpm(audio)
         safe_preset = preset if preset in panning_preset_names() else "reference_luxe"
         reference_speed_presets = {"reference_luxe", "phi_reference_orbit", "fibonacci_spiral", "golden_figure8", "lucas_breath"}
