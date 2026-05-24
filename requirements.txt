@@ -6,3 +6,4 @@ librosa>=0.10
 tkinterdnd2>=0.3.0
 pytest>=8.0
 pyinstaller>=6.0
+demucs>=4.0

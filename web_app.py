@@ -14,6 +14,13 @@ from fastapi.staticfiles import StaticFiles
 
 from eightd_engine.audio_io import export_audio, load_audio
 from eightd_engine.dsp import analyze_correlation, bpm_to_premium_rotation_cpm, estimate_bpm, panning_preset_names, process_8d
+from eightd_engine.stems import (
+    StemData,
+    StemSeparationUnavailable,
+    available_stem_mode,
+    process_stem_spatial_mix,
+    separate_stems_from_file,
+)
 
 APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -327,6 +334,13 @@ HTML = """
                 <option value="vocal_safe">Vocal Safe — clear center, gentle motion</option>
               </select>
             </div>
+            <div class="field">
+              <label for="stemMode">Processing mode</label>
+              <select id="stemMode">
+                <option value="classic" selected>Classic full-mix spatial master</option>
+                <option value="ai_stems">AI stem spatial mix — vocals/drums/bass/instruments</option>
+              </select>
+            </div>
             <button onclick="document.getElementById('file').click()">Select Track</button>
           </div>
           <div class="prompt-box">
@@ -356,6 +370,7 @@ const hint = document.getElementById('hint');
 const statusEl = document.getElementById('status');
 const bar = document.getElementById('bar');
 const preset = document.getElementById('preset');
+const stemMode = document.getElementById('stemMode');
 const mixPrompt = document.getElementById('mixPrompt');
 
 ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('hover'); title.textContent='Release to master'; }));
@@ -373,6 +388,7 @@ async function upload(f) {
   const data = new FormData();
   data.append('file', f);
   data.append('preset', preset.value);
+  data.append('stem_mode', stemMode.value);
   data.append('mix_prompt', mixPrompt.value.trim());
   try {
     const json = await xhrUpload('/convert', data, pct => {
@@ -380,7 +396,7 @@ async function upload(f) {
       document.querySelector('.fill').style.width = `${pct}%`;
     });
     title.textContent = 'Rendering spatial master…';
-    statusEl.textContent = 'Upload complete. Tempo analysis, cleanup, panning, room, and phase guard are running now.';
+    statusEl.textContent = 'Upload complete. Tempo analysis, optional stem separation, cleanup, panning, room, and phase guard are running now.';
     document.querySelector('.fill').classList.add('indeterminate');
     await pollJob(json.job_id);
   } catch (err) {
@@ -416,7 +432,7 @@ async function pollJob(jobId) {
     if (job.status === 'complete') {
       title.textContent = 'Spatial master ready';
       hint.innerHTML = `<a href="${job.download_url}" download>Download ${job.output_name}</a>`;
-      statusEl.textContent = `Profile: ${job.preset}\nPrompt: ${job.mix_notes || 'Selected profile only'}\nBPM: ${job.bpm}\nOrbit: ${job.rotation_cpm} cycles/min\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
+      statusEl.textContent = `Profile: ${job.preset}\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\nPrompt: ${job.mix_notes || 'Selected profile only'}\nBPM: ${job.bpm}\nOrbit: ${job.rotation_cpm} cycles/min\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
       return;
     }
     if (job.status === 'failed') throw new Error(job.error || 'Render failed');
@@ -439,7 +455,7 @@ def _set_job(job_id: str, **updates):
         job.update(updates)
         job["updated_at"] = time.time()
 
-def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = ""):
+def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = "", stem_mode: str = "classic"):
     try:
         _set_job(job_id, status="processing", message="Analyzing BPM…")
         audio = load_audio(src)
@@ -486,22 +502,63 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             mix_prompt=mix_prompt,
             mix_notes=mix_notes,
         )
-        rendered = process_8d(
-            audio,
-            rotation_cpm=rotation_cpm,
-            room_size=settings["room_size"],
-            crossover_hz=150.0,
-            motion_depth=settings["motion_depth"],
-            high_emphasis=settings["high_emphasis"],
-            spatial_mix=settings["spatial_mix"],
-            denoise_amount=settings["denoise_amount"],
-            panning_preset=safe_preset,
-            preserve_quality=True,
-            youtube_master=False,
-            section_automation=True,
-            center_focus=settings["center_focus"],
-            felt_presence=settings["felt_presence"],
-        )
+        requested_stem_mode = stem_mode if stem_mode in {"classic", "ai_stems"} else "classic"
+        stem_engine = "full_mix"
+        stem_count = 0
+        if requested_stem_mode == "ai_stems":
+            try:
+                mode_info = available_stem_mode()
+                if mode_info.get("mode") != "demucs":
+                    raise StemSeparationUnavailable(mode_info.get("message", "AI stem separation is unavailable"))
+                _set_job(job_id, message="Separating vocals, drums, bass, and instruments with AI stems…", stem_mode=requested_stem_mode)
+                stems = separate_stems_from_file(src, work_dir=APP_DIR / f"{job_id}_stems")
+                stem_count = len(stems)
+                _set_job(job_id, message=f"Rendering {stem_count} separated stems with role-aware spatial processing…")
+                rendered = process_stem_spatial_mix(
+                    stems,
+                    reference=audio,
+                    rotation_cpm=rotation_cpm,
+                    panning_preset=safe_preset,
+                )
+                stem_engine = "demucs"
+            except StemSeparationUnavailable as exc:
+                stem_engine = "hybrid_fallback"
+                fallback_note = f"AI stems unavailable; used classic protected full-mix render ({exc})."
+                mix_notes = f"{mix_notes} | {fallback_note}" if mix_notes else fallback_note
+                _set_job(job_id, message="AI stems unavailable; falling back to classic protected full-mix render…")
+                rendered = process_8d(
+                    audio,
+                    rotation_cpm=rotation_cpm,
+                    room_size=settings["room_size"],
+                    crossover_hz=150.0,
+                    motion_depth=settings["motion_depth"],
+                    high_emphasis=settings["high_emphasis"],
+                    spatial_mix=settings["spatial_mix"],
+                    denoise_amount=settings["denoise_amount"],
+                    panning_preset=safe_preset,
+                    preserve_quality=True,
+                    youtube_master=False,
+                    section_automation=True,
+                    center_focus=settings["center_focus"],
+                    felt_presence=settings["felt_presence"],
+                )
+        else:
+            rendered = process_8d(
+                audio,
+                rotation_cpm=rotation_cpm,
+                room_size=settings["room_size"],
+                crossover_hz=150.0,
+                motion_depth=settings["motion_depth"],
+                high_emphasis=settings["high_emphasis"],
+                spatial_mix=settings["spatial_mix"],
+                denoise_amount=settings["denoise_amount"],
+                panning_preset=safe_preset,
+                preserve_quality=True,
+                youtube_master=False,
+                section_automation=True,
+                center_focus=settings["center_focus"],
+                felt_presence=settings["felt_presence"],
+            )
         _set_job(job_id, message="Writing WAV export…")
         report = analyze_correlation(rendered.samples)
         export_audio(rendered, out)
@@ -520,12 +577,15 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             mix_prompt=mix_prompt,
             mix_notes=mix_notes,
             settings={k: round(float(v), 3) for k, v in settings.items()},
+            stem_mode=requested_stem_mode,
+            stem_engine=stem_engine,
+            stem_count=stem_count,
         )
     except Exception as exc:
         _set_job(job_id, status="failed", message="Render failed.", error=str(exc))
 
 @app.post("/convert")
-async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe"), mix_prompt: str = Form("")):
+async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe"), mix_prompt: str = Form(""), stem_mode: str = Form("classic")):
     suffix = Path(file.filename or "audio").suffix.lower() or ".audio"
     safe_stem = Path(file.filename or "audio").stem.replace("/", "_").replace("\\", "_")[:80]
     job_id = uuid.uuid4().hex[:12]
@@ -534,8 +594,8 @@ async def convert(file: UploadFile = File(...), preset: str = Form("reference_lu
     with src.open("wb") as f:
         while chunk := await file.read(1024 * 1024):
             f.write(chunk)
-    _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name, mix_prompt=mix_prompt)
-    EXECUTOR.submit(_process_job, job_id, src, out, preset, mix_prompt)
+    _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name, mix_prompt=mix_prompt, stem_mode=stem_mode)
+    EXECUTOR.submit(_process_job, job_id, src, out, preset, mix_prompt, stem_mode)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing", "message": "Upload accepted. DSP render started."})
 
 @app.get("/jobs/{job_id}")
