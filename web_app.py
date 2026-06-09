@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import time
 import uuid
@@ -12,25 +13,33 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-try:
-    from eightd_engine.audio_io import export_audio, load_audio
-    from eightd_engine.dsp import (
-        analyze_correlation,
-        bpm_to_premium_rotation_cpm,
-        estimate_bpm,
-        panning_preset_names,
-        process_8d,
-    )
-    from eightd_engine.stems import (
-        StemData,
-        StemSeparationUnavailable,
-        available_stem_mode,
-        process_stem_spatial_mix,
-        separate_stems_from_file,
-    )
-    DSP_AVAILABLE = True
-except ImportError:
+# Vercel serverless freezes the process after each response, so background
+# threads never complete and the 4.5 MB body limit blocks real audio files.
+# Force DSP offline on Vercel so the UI stays honest about what it can do.
+_ON_VERCEL = bool(os.environ.get("VERCEL"))
+
+if _ON_VERCEL:
     DSP_AVAILABLE = False
+else:
+    try:
+        from eightd_engine.audio_io import export_audio, load_audio
+        from eightd_engine.dsp import (
+            analyze_correlation,
+            bpm_to_premium_rotation_cpm,
+            estimate_bpm,
+            panning_preset_names,
+            process_8d,
+        )
+        from eightd_engine.stems import (
+            StemData,
+            StemSeparationUnavailable,
+            available_stem_mode,
+            process_stem_spatial_mix,
+            separate_stems_from_file,
+        )
+        DSP_AVAILABLE = True
+    except ImportError:
+        DSP_AVAILABLE = False
 
 APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -481,12 +490,12 @@ let DSP_OK = true;
     const d = await r.json();
     DSP_OK = d.dsp_available;
     if (!DSP_OK) {
-      document.querySelector('.kicker').textContent = 'Cloud preview · DSP offline';
-      title.textContent = 'Run locally to master tracks';
-      hint.textContent = 'This deployment is a UI preview only. For full spatial mastering, run the engine on your own machine: python -m uvicorn web_app:app --port 8765';
-      statusEl.textContent = 'DSP stack not loaded in this environment.\\nAudio rendering requires a local server with the full dependencies installed.\\n\\nRun locally:\\npython -m uvicorn web_app:app --port 8765 --reload';
+      document.querySelector('.kicker').textContent = 'UI preview · deploy on Railway to master';
+      title.textContent = 'Deploy to Railway for full mastering';
+      hint.textContent = 'This Vercel build is a UI preview. To master tracks in the cloud, deploy the engine to Railway (railway.app) — it runs the full DSP stack with no file-size or execution-time limits.';
+      statusEl.textContent = 'DSP offline on this Vercel preview.\\n\\nTo run in the cloud: deploy to railway.app — connect your GitHub repo and Railway handles the rest.\\n\\nTo run locally: python -m uvicorn web_app:app --port 8765';
       const btn = document.querySelector('button.launch');
-      btn.textContent = 'Unavailable in cloud preview';
+      btn.textContent = 'Deploy to Railway to enable';
       btn.disabled = true;
       btn.style.opacity = '0.35';
       btn.style.cursor = 'not-allowed';
@@ -718,7 +727,11 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "dsp_available": DSP_AVAILABLE}
+    return {
+        "status": "ok",
+        "dsp_available": DSP_AVAILABLE,
+        "platform": "vercel" if _ON_VERCEL else "server",
+    }
 
 
 @app.post("/convert")

@@ -1,5 +1,11 @@
-# Vercel / serverless deployment — lightweight serving layer only.
-# For local development with full DSP stack, use: pip install -r requirements-local.txt
+# Core server
 fastapi>=0.100
 uvicorn[standard]>=0.23
 python-multipart>=0.0.7
+# DSP stack — enables full spatial mastering on Railway and local servers.
+# scipy and soundfile are optional but recommended; the engine falls back
+# gracefully to numpy-only crossover filters and stdlib WAV if they are absent.
+numpy>=1.24
+scipy>=1.10
+soundfile>=0.12
+pydub>=0.25
