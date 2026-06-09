@@ -264,7 +264,7 @@ HTML = """
     .corner.bl{ left:14px; bottom:14px; border-right:0; border-top:0; }
     .corner.br{ right:14px; bottom:14px; border-left:0; border-top:0; }
 
-    .visual{ display:grid; place-items:center; padding:14px 0 4px; }
+    .visual{ display:grid; place-items:center; padding:14px 0 4px; pointer-events:none; user-select:none; }
     .orbit{ width:min(330px,72vw); aspect-ratio:1; border-radius:50%; position:relative; display:grid; place-items:center;
       border:1px solid rgba(150,205,255,.18); background:radial-gradient(circle, rgba(98,224,255,.06), rgba(255,255,255,.01) 55%, transparent); }
     .orbit::before, .orbit::after{ content:""; position:absolute; border-radius:50%; border:1px solid rgba(157,139,255,.16); }
@@ -495,9 +495,10 @@ let DSP_OK = true;
   } catch(e) {}
 })();
 
-['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); if (DSP_OK) zone.classList.add('hover'); title.textContent = DSP_OK ? 'Release to master' : 'Run locally to master tracks'; }));
-['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('hover'); if (!file.files.length) title.textContent = DSP_OK ? 'Drop your track here' : 'Run locally to master tracks'; }));
-zone.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f && DSP_OK) upload(f); });
+zone.addEventListener('dragenter', e => { e.preventDefault(); if (DSP_OK) zone.classList.add('hover'); title.textContent = DSP_OK ? 'Release to master' : 'Run locally to master tracks'; });
+zone.addEventListener('dragover',  e => { e.preventDefault(); });
+zone.addEventListener('dragleave', e => { if (zone.contains(e.relatedTarget)) return; zone.classList.remove('hover'); if (!file.files.length) title.textContent = DSP_OK ? 'Drop your track here' : 'Run locally to master tracks'; });
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('hover'); title.textContent = DSP_OK ? 'Drop your track here' : 'Run locally to master tracks'; const f = e.dataTransfer.files[0]; if (f && DSP_OK) upload(f); });
 file.addEventListener('change', e => { const f = e.target.files[0]; if (f && DSP_OK) upload(f); });
 
 async function upload(f) {
