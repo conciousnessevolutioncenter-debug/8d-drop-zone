@@ -152,186 +152,252 @@ HTML = """
   <title>The 8D Engine — Spatial Audio Mastering</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    :root {
+    :root{
       color-scheme: dark;
-      --bg: #050711;
-      --bg-2: #0b1020;
-      --panel: rgba(13, 18, 33, 0.78);
-      --panel-strong: rgba(19, 26, 45, 0.92);
-      --line: rgba(180, 196, 255, 0.16);
-      --line-strong: rgba(189, 202, 255, 0.28);
-      --ink: rgba(248, 250, 252, 0.96);
-      --muted: rgba(222, 229, 240, 0.80);
-      --soft: rgba(181, 193, 211, 0.72);
-      --accent: #cbb7fb;
-      --accent-2: #76d7ff;
-      --cream: #e9e5dd;
-      --success: #9ef6c9;
-      --shadow: 0 30px 100px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255,255,255,0.05);
+      --void:#02040c; --void2:#05070f; --deep:#070b16;
+      --hair:rgba(130,180,255,0.12);
+      --hair2:rgba(150,205,255,0.30);
+      --ink:#eaf1ff;
+      --muted:rgba(198,213,240,0.78);
+      --soft:rgba(150,172,210,0.64);
+      --cyan:#62e0ff; --ice:#a9ecff; --violet:#9d8bff; --gold:#e9d2a3;
+      --success:#74f5c0; --danger:#ff9a9a;
+      --shadow:0 40px 120px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
+      --mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --display:'Space Grotesk', system-ui, sans-serif;
     }
-    * { box-sizing: border-box; }
-    html { min-height: 100%; background: var(--bg); }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      overflow-x: hidden;
-      color: var(--ink);
-      font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+    *{ box-sizing:border-box; }
+    html{ min-height:100%; background:var(--void); }
+    body{
+      margin:0; min-height:100vh; overflow-x:hidden; color:var(--ink);
+      font-family:Inter, system-ui, -apple-system, Segoe UI, sans-serif;
       background:
-        radial-gradient(circle at 16% 10%, rgba(118, 215, 255, 0.18), transparent 30vw),
-        radial-gradient(circle at 82% 14%, rgba(203, 183, 251, 0.20), transparent 32vw),
-        linear-gradient(145deg, #050711 0%, #090d19 46%, #0f1023 100%);
+        radial-gradient(60vw 50vw at 50% -10%, rgba(98,224,255,.10), transparent 60%),
+        radial-gradient(50vw 40vw at 88% 8%, rgba(157,139,255,.12), transparent 60%),
+        linear-gradient(180deg, #02040c 0%, #04060f 45%, #060912 100%);
     }
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.34;
+    .space{ position:fixed; inset:0; pointer-events:none; z-index:-3; }
+    .stars{
       background-image:
-        linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
-      background-size: 72px 72px;
-      mask-image: radial-gradient(circle at 50% 12%, black, transparent 72%);
+        radial-gradient(1px 1px at 18px 32px, rgba(255,255,255,.75), transparent),
+        radial-gradient(1px 1px at 92px 132px, rgba(180,222,255,.6), transparent),
+        radial-gradient(1.6px 1.6px at 168px 70px, rgba(255,255,255,.5), transparent),
+        radial-gradient(1px 1px at 210px 190px, rgba(160,200,255,.5), transparent);
+      background-size:240px 240px; animation:drift 140s linear infinite;
     }
-    .shell { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; padding: 38px 0 48px; position: relative; }
-    .nav { display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:54px; }
-    .brand { display:flex; align-items:center; gap:12px; color:var(--ink); text-decoration:none; font-weight:700; letter-spacing:-0.03em; }
-    .mark { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; color:#111827; background:linear-gradient(135deg, var(--cream), #b9d8ff 55%, var(--accent)); box-shadow:0 12px 38px rgba(118,215,255,.18); }
-    .nav-note { color:var(--soft); font-size:13px; letter-spacing:.08em; text-transform:uppercase; }
-    .hero { display:grid; grid-template-columns: minmax(0, 1.02fr) minmax(360px, .98fr); gap:34px; align-items:stretch; }
-    .copy { padding: 16px 0 0; }
-    .eyebrow { display:inline-flex; align-items:center; gap:10px; padding:8px 12px; border:1px solid var(--line); border-radius:999px; background:rgba(255,255,255,.035); color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
-    .pulse { width:7px; height:7px; border-radius:50%; background:var(--success); box-shadow:0 0 24px var(--success); }
-    h1 { margin: 22px 0 18px; max-width: 780px; font-size: clamp(46px, 7vw, 86px); line-height: .91; letter-spacing: -0.075em; font-weight: 540; }
-    .grad { background:linear-gradient(100deg, #fff 8%, #dbe8ff 45%, var(--accent) 92%); -webkit-background-clip:text; background-clip:text; color:transparent; }
-    .lede { max-width: 620px; color: var(--muted); font-size: clamp(17px, 2vw, 20px); line-height: 1.55; letter-spacing: -0.01em; margin:0 0 28px; }
-    .proof { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; max-width:620px; }
-    .proof div { border:1px solid var(--line); background:rgba(255,255,255,.035); border-radius:16px; padding:14px; min-height:84px; }
-    .proof strong { display:block; color:var(--ink); font-size:20px; letter-spacing:-.04em; margin-bottom:4px; }
-    .proof span { color:var(--soft); font-size:12px; line-height:1.35; }
-    #zone {
-      position:relative;
-      overflow:hidden;
-      min-height: 610px;
-      border: 1px solid var(--line-strong);
-      border-radius: 34px;
-      background: linear-gradient(180deg, rgba(18,24,42,.92), rgba(10,14,27,.82));
-      box-shadow: var(--shadow);
-      padding: 28px;
-      display:flex;
-      flex-direction:column;
-      justify-content:space-between;
-      transition: transform .22s ease, border-color .22s ease, box-shadow .22s ease;
-      isolation:isolate;
+    .stars2{
+      opacity:.6;
+      background-image:
+        radial-gradient(1px 1px at 60px 80px, rgba(255,255,255,.5), transparent),
+        radial-gradient(1.2px 1.2px at 140px 20px, rgba(200,230,255,.45), transparent),
+        radial-gradient(1px 1px at 30px 200px, rgba(255,255,255,.4), transparent);
+      background-size:320px 320px; animation:drift 90s linear infinite reverse;
     }
-    #zone::before { content:""; position:absolute; inset:-30%; background: radial-gradient(circle, rgba(203,183,251,.16), transparent 31%), conic-gradient(from 180deg, transparent, rgba(118,215,255,.14), transparent, rgba(203,183,251,.12), transparent); opacity:.52; animation: orbitGlow 18s linear infinite; z-index:-2; }
-    #zone::after { content:""; position:absolute; inset:1px; border-radius:33px; background:linear-gradient(180deg, rgba(255,255,255,.045), transparent 32%); pointer-events:none; z-index:-1; }
-    #zone.hover { transform: translateY(-3px); border-color: rgba(118,215,255,.72); box-shadow:0 34px 130px rgba(53, 90, 164, .36), var(--shadow); }
-    @keyframes orbitGlow { to { transform: rotate(360deg); } }
-    .visual { display:grid; place-items:center; padding:20px 0 10px; }
-    .orbit { width:min(330px, 74vw); aspect-ratio:1; border-radius:50%; border:1px solid rgba(255,255,255,.16); position:relative; display:grid; place-items:center; background:radial-gradient(circle, rgba(255,255,255,.06), rgba(255,255,255,.01) 55%, transparent); }
-    .orbit::before, .orbit::after { content:""; position:absolute; border-radius:50%; border:1px solid rgba(203,183,251,.18); }
-    .orbit::before { inset:13%; transform:rotate(28deg) scaleY(.58); }
-    .orbit::after { inset:26%; border-color:rgba(118,215,255,.16); transform:rotate(-31deg) scaleY(.62); }
-    .dot { position:absolute; width:12px; height:12px; border-radius:50%; background:var(--cream); box-shadow:0 0 30px rgba(233,229,221,.84); offset-path: path('M 165 24 C 247 28 307 95 304 168 C 301 246 237 306 162 302 C 83 298 26 240 27 164 C 29 86 88 23 165 24'); animation: travel 10.4s linear infinite; }
-    @keyframes travel { to { offset-distance:100%; } }
-    .wave { width:72%; height:86px; opacity:.88; filter:drop-shadow(0 0 22px rgba(118,215,255,.14)); }
-    .zone-copy { text-align:center; max-width: 560px; margin:0 auto; }
-    .kicker { color:var(--accent); font-size:12px; text-transform:uppercase; letter-spacing:.16em; font-weight:800; margin-bottom:10px; }
-    .title { font-size: clamp(27px, 3vw, 38px); line-height:1; font-weight:700; letter-spacing:-.055em; margin-bottom:12px; }
-    .hint { color:var(--muted); line-height:1.55; font-size:15px; }
-    .controls { display:grid; grid-template-columns: 1fr auto; gap:12px; align-items:end; margin-top:24px; }
-    .field { text-align:left; }
-    label { display:block; color:var(--soft); font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin:0 0 8px 2px; }
-    select, button, textarea { font: inherit; }
-    select { width:100%; min-height:52px; padding:0 42px 0 16px; border:1px solid var(--line); border-radius:14px; background:rgba(4,7,15,.72); color:var(--ink); font-weight:650; outline:none; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
-    select:focus { border-color:rgba(203,183,251,.7); box-shadow:0 0 0 4px rgba(203,183,251,.12); }
-    textarea { width:100%; min-height:104px; resize:vertical; padding:14px 16px; border:1px solid var(--line); border-radius:16px; background:rgba(4,7,15,.72); color:var(--ink); outline:none; line-height:1.45; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
-    textarea:focus { border-color:rgba(118,215,255,.72); box-shadow:0 0 0 4px rgba(118,215,255,.10); }
-    textarea::placeholder { color:rgba(222,229,240,.48); }
-    .prompt-box { margin-top:14px; text-align:left; }
-    .prompt-help { margin:8px 0 0 2px; color:var(--soft); font-size:12px; line-height:1.45; }
-    button { min-height:52px; padding:0 20px; border:0; border-radius:14px; background:var(--cream); color:#111827; font-weight:800; cursor:pointer; white-space:nowrap; box-shadow:0 18px 50px rgba(233,229,221,.12); transition:transform .18s ease, filter .18s ease; }
-    button:hover { transform:translateY(-1px); filter:brightness(1.04); }
-    input { display:none; }
-    .bar { width:100%; height:8px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; margin:18px auto 0; display:none; }
-    .fill { width:0%; height:100%; background:linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius:999px; transition:width .15s linear; }
-    .fill.indeterminate { width:32%; animation:load 1s infinite ease-in-out; }
-    @keyframes load { 0%{transform:translateX(-115%)} 100%{transform:translateX(330%)} }
-    .status-card { margin-top:18px; border:1px solid var(--line); border-radius:18px; padding:14px 16px; background:rgba(3,6,14,.48); }
-    .status { color:var(--ink); font-weight:650; white-space:pre-line; font-size:13px; line-height:1.45; }
-    a { color:var(--success); font-weight:800; text-decoration:none; }
-    a:hover { text-decoration:underline; }
-    .badges { margin-top:26px; display:flex; flex-wrap:wrap; gap:10px; }
-    .badge { border:1px solid var(--line); background:rgba(255,255,255,.035); color:var(--muted); border-radius:999px; padding:9px 12px; font-size:12px; font-weight:700; }
-    .signal { margin-top:34px; display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap:10px; }
-    .signal div { border:1px solid var(--line); border-radius:18px; padding:14px; background:rgba(255,255,255,.032); }
-    .signal strong { display:block; font-size:13px; margin-bottom:5px; }
-    .signal span { display:block; color:var(--soft); font-size:11px; line-height:1.35; }
-    .mono { font-family:'JetBrains Mono', ui-monospace, monospace; }
-    @media (max-width: 920px) {
-      .hero { grid-template-columns:1fr; }
-      .nav { margin-bottom:32px; }
-      .proof, .signal { grid-template-columns:1fr; }
-      #zone { min-height: auto; }
+    .aurora{
+      background:
+        radial-gradient(38vw 38vw at 10% 6%, rgba(98,224,255,.14), transparent 60%),
+        radial-gradient(42vw 42vw at 92% 12%, rgba(157,139,255,.14), transparent 60%),
+        radial-gradient(50vw 40vw at 50% 116%, rgba(233,210,163,.07), transparent 60%);
+      animation:breathe 18s ease-in-out infinite alternate;
     }
-    @media (max-width: 560px) {
-      .shell { width:min(100vw - 24px, 1180px); padding-top:22px; }
-      .nav-note { display:none; }
-      .controls { grid-template-columns:1fr; }
-      button { width:100%; }
-      .orbit { width:260px; }
+    .grid{
+      z-index:-2; opacity:.5;
+      background-image:
+        linear-gradient(rgba(120,180,255,.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(120,180,255,.045) 1px, transparent 1px);
+      background-size:64px 64px;
+      -webkit-mask-image: radial-gradient(circle at 50% 0%, black, transparent 72%);
+      mask-image: radial-gradient(circle at 50% 0%, black, transparent 72%);
     }
-    @media (prefers-reduced-motion: reduce) { .dot, #zone::before, .fill.indeterminate { animation:none; } }
+    @keyframes drift{ to{ background-position:240px 480px; } }
+    @keyframes breathe{ from{ opacity:.7; transform:scale(1);} to{ opacity:1; transform:scale(1.06);} }
+    @keyframes spin{ to{ transform:rotate(360deg); } }
+    @keyframes blink{ 0%,100%{opacity:1;} 50%{opacity:.35;} }
+
+    .shell{ width:min(1200px, calc(100vw - 40px)); margin:0 auto; padding:30px 0 60px; position:relative; }
+    .tlabel{ font-family:var(--mono); font-size:10.5px; letter-spacing:.34em; text-transform:uppercase; color:var(--soft); }
+
+    .nav{ display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:46px;
+      padding:12px 16px; border:1px solid var(--hair); border-radius:16px;
+      background:linear-gradient(180deg, rgba(12,18,34,.6), rgba(7,11,22,.4)); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
+    .brand{ display:flex; align-items:center; gap:13px; color:var(--ink); text-decoration:none; }
+    .mark{ position:relative; width:34px; height:34px; border-radius:50%; display:grid; place-items:center; font-size:15px; color:#04121a;
+      background:radial-gradient(circle at 35% 30%, #fff, var(--ice) 40%, var(--cyan)); box-shadow:0 0 22px rgba(98,224,255,.5), inset 0 0 8px rgba(255,255,255,.6); }
+    .mark::after{ content:""; position:absolute; inset:-6px; border-radius:50%; border:1px solid rgba(98,224,255,.4); border-top-color:transparent; border-left-color:transparent; animation:spin 7s linear infinite; }
+    .word{ font-family:var(--display); font-weight:600; font-size:16px; letter-spacing:.22em; }
+    .nav-right{ display:flex; align-items:center; gap:18px; }
+    .sys{ display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); font-size:10.5px; letter-spacing:.22em; color:var(--muted); text-transform:uppercase; }
+    .nav-note{ font-family:var(--mono); font-size:10.5px; letter-spacing:.24em; color:var(--soft); text-transform:uppercase; }
+    .pulse{ width:7px; height:7px; border-radius:50%; background:var(--success); box-shadow:0 0 14px var(--success); animation:blink 2.4s ease-in-out infinite; }
+
+    .hero{ display:grid; grid-template-columns:minmax(0,1.05fr) minmax(380px,.95fr); gap:30px; align-items:stretch; }
+    .copy{ padding:8px 0 0; }
+    .eyebrow{ display:inline-flex; align-items:center; gap:10px; padding:8px 14px; border:1px solid var(--hair); border-radius:999px; background:rgba(98,224,255,.05); font-family:var(--mono); font-size:10.5px; font-weight:500; letter-spacing:.26em; text-transform:uppercase; color:var(--muted); }
+    h1{ margin:22px 0 18px; max-width:760px; font-family:var(--display); font-size:clamp(42px,6.4vw,78px); line-height:.96; letter-spacing:-.03em; font-weight:500; }
+    .grad{ background:linear-gradient(100deg, #fff 6%, var(--ice) 44%, var(--cyan) 78%, var(--violet) 100%); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    .lede{ max-width:600px; color:var(--muted); font-size:clamp(16px,1.9vw,19px); line-height:1.6; margin:0 0 30px; }
+    .proof{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; max-width:620px; }
+    .proof div{ position:relative; border:1px solid var(--hair); background:linear-gradient(180deg, rgba(13,20,38,.55), rgba(7,11,22,.35)); border-radius:16px; padding:14px 16px; min-height:96px; overflow:hidden; }
+    .proof div::before{ content:""; position:absolute; left:0; top:0; width:100%; height:1px; background:linear-gradient(90deg, transparent, var(--hair2), transparent); }
+    .proof strong{ display:block; font-family:var(--display); color:var(--ink); font-size:26px; letter-spacing:-.02em; margin:8px 0 4px; }
+    .proof strong i{ font-style:normal; font-size:14px; color:var(--cyan); margin-left:3px; }
+    .proof span:not(.tlabel){ color:var(--soft); font-size:12px; line-height:1.4; display:block; }
+    .badges{ margin-top:24px; display:flex; flex-wrap:wrap; gap:9px; }
+    .badge{ font-family:var(--mono); border:1px solid var(--hair); background:rgba(255,255,255,.025); color:var(--muted); border-radius:999px; padding:8px 12px; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; transition:border-color .2s, color .2s, box-shadow .2s; }
+    .badge:hover{ border-color:var(--hair2); color:var(--ink); box-shadow:0 0 18px rgba(98,224,255,.12); }
+
+    #zone{ position:relative; overflow:hidden; min-height:640px; border:1px solid var(--hair2); border-radius:28px;
+      background:linear-gradient(180deg, rgba(14,20,38,.72), rgba(7,11,22,.6)); backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+      box-shadow:var(--shadow); padding:30px; display:flex; flex-direction:column; justify-content:space-between;
+      transition:transform .25s ease, border-color .25s ease, box-shadow .25s ease; isolation:isolate; }
+    #zone::before{ content:""; position:absolute; inset:-40%; z-index:-2; opacity:.5;
+      background: conic-gradient(from 140deg, transparent, rgba(98,224,255,.16), transparent 35%, rgba(157,139,255,.14), transparent 70%);
+      animation:spin 22s linear infinite; }
+    #zone::after{ content:""; position:absolute; inset:1px; border-radius:27px; z-index:-1; pointer-events:none;
+      background:linear-gradient(180deg, rgba(255,255,255,.05), transparent 30%); }
+    #zone.hover{ transform:translateY(-3px); border-color:rgba(98,224,255,.7); box-shadow:0 40px 140px rgba(40,120,190,.4), var(--shadow); }
+    .corner{ position:absolute; width:18px; height:18px; border:1.5px solid rgba(98,224,255,.55); z-index:2; }
+    .corner.tl{ left:14px; top:14px; border-right:0; border-bottom:0; }
+    .corner.tr{ right:14px; top:14px; border-left:0; border-bottom:0; }
+    .corner.bl{ left:14px; bottom:14px; border-right:0; border-top:0; }
+    .corner.br{ right:14px; bottom:14px; border-left:0; border-top:0; }
+
+    .visual{ display:grid; place-items:center; padding:14px 0 4px; }
+    .orbit{ width:min(330px,72vw); aspect-ratio:1; border-radius:50%; position:relative; display:grid; place-items:center;
+      border:1px solid rgba(150,205,255,.18); background:radial-gradient(circle, rgba(98,224,255,.06), rgba(255,255,255,.01) 55%, transparent); }
+    .orbit::before, .orbit::after{ content:""; position:absolute; border-radius:50%; border:1px solid rgba(157,139,255,.16); }
+    .orbit::before{ inset:13%; transform:rotate(28deg) scaleY(.58); }
+    .orbit::after{ inset:26%; border-color:rgba(98,224,255,.16); transform:rotate(-31deg) scaleY(.62); }
+    .sweep{ position:absolute; inset:0; border-radius:50%; background:conic-gradient(from 0deg, rgba(98,224,255,.32), rgba(98,224,255,0) 28%); animation:spin 5.5s linear infinite;
+      -webkit-mask:radial-gradient(circle, transparent 26%, #000 27%); mask:radial-gradient(circle, transparent 26%, #000 27%); }
+    .dot{ position:absolute; width:12px; height:12px; border-radius:50%; background:#fff; box-shadow:0 0 28px rgba(169,236,255,.9), 0 0 8px var(--cyan);
+      offset-path: path('M 165 24 C 247 28 307 95 304 168 C 301 246 237 306 162 302 C 83 298 26 240 27 164 C 29 86 88 23 165 24'); animation:travel 10.4s linear infinite; }
+    @keyframes travel{ to{ offset-distance:100%; } }
+    .wave{ width:70%; height:80px; opacity:.9; filter:drop-shadow(0 0 22px rgba(98,224,255,.18)); }
+
+    .zone-copy{ text-align:center; max-width:560px; margin:0 auto; width:100%; }
+    .kicker{ font-family:var(--mono); color:var(--cyan); font-size:10.5px; text-transform:uppercase; letter-spacing:.28em; margin-bottom:10px; }
+    .title{ font-family:var(--display); font-size:clamp(26px,3vw,36px); line-height:1.02; font-weight:600; letter-spacing:-.02em; margin-bottom:12px; }
+    .hint{ color:var(--muted); line-height:1.55; font-size:14.5px; }
+    .controls{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:24px; }
+    .field{ text-align:left; }
+    .controls > .launch{ grid-column:1 / -1; }
+    label{ display:block; font-family:var(--mono); color:var(--soft); font-size:10px; letter-spacing:.2em; text-transform:uppercase; margin:0 0 8px 2px; }
+    select, button, textarea{ font:inherit; }
+    select{ width:100%; min-height:52px; padding:0 40px 0 15px; border:1px solid var(--hair); border-radius:13px; background:rgba(4,7,15,.7); color:var(--ink); font-weight:500; outline:none;
+      appearance:none; -webkit-appearance:none;
+      background-image:linear-gradient(45deg, transparent 50%, var(--cyan) 50%), linear-gradient(135deg, var(--cyan) 50%, transparent 50%);
+      background-position:calc(100% - 20px) 23px, calc(100% - 15px) 23px; background-size:6px 6px, 6px 6px; background-repeat:no-repeat; }
+    select:focus{ border-color:rgba(98,224,255,.6); box-shadow:0 0 0 4px rgba(98,224,255,.12); }
+    textarea{ width:100%; min-height:100px; resize:vertical; padding:14px 16px; border:1px solid var(--hair); border-radius:14px; background:rgba(4,7,15,.7); color:var(--ink); outline:none; line-height:1.5; }
+    textarea:focus{ border-color:rgba(98,224,255,.6); box-shadow:0 0 0 4px rgba(98,224,255,.1); }
+    textarea::placeholder{ color:rgba(200,214,240,.42); }
+    .prompt-box{ margin-top:14px; text-align:left; }
+    .prompt-help{ margin:8px 0 0 2px; color:var(--soft); font-size:11.5px; line-height:1.45; }
+    button.launch{ min-height:52px; padding:0 22px; border:0; border-radius:13px; cursor:pointer; white-space:nowrap; font-family:var(--display); font-weight:600; letter-spacing:.06em;
+      color:#04121a; background:linear-gradient(135deg, var(--ice), var(--cyan) 55%, var(--violet)); box-shadow:0 14px 40px rgba(98,224,255,.28), inset 0 1px 0 rgba(255,255,255,.4);
+      transition:transform .18s ease, filter .18s ease, box-shadow .18s ease; }
+    button.launch:hover{ transform:translateY(-1px); filter:brightness(1.05); box-shadow:0 18px 52px rgba(98,224,255,.42), inset 0 1px 0 rgba(255,255,255,.4); }
+    input{ display:none; }
+    .bar{ width:100%; height:7px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; margin:18px auto 0; display:none; }
+    .fill{ width:0%; height:100%; background:linear-gradient(90deg, var(--cyan), var(--violet)); border-radius:999px; transition:width .15s linear; box-shadow:0 0 16px rgba(98,224,255,.5); }
+    .fill.indeterminate{ width:32%; animation:load 1s infinite ease-in-out; }
+    @keyframes load{ 0%{ transform:translateX(-115%);} 100%{ transform:translateX(330%);} }
+    .status-card{ margin-top:18px; border:1px solid var(--hair); border-radius:16px; padding:13px 16px; background:rgba(3,6,14,.5); text-align:left; }
+    .status-card .tlabel{ display:block; margin-bottom:6px; color:var(--cyan); }
+    .status{ color:var(--ink); font-family:var(--mono); white-space:pre-line; font-size:12px; line-height:1.5; }
+    a{ color:var(--success); font-weight:600; text-decoration:none; }
+    a:hover{ text-decoration:underline; }
+
+    .section-head{ display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin:64px 0 18px; }
+    .section-head h2{ font-family:var(--display); font-weight:500; font-size:clamp(22px,2.6vw,30px); letter-spacing:-.02em; margin:0; }
+    .systems{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
+    .systems div{ position:relative; border:1px solid var(--hair); border-radius:16px; padding:16px; background:linear-gradient(180deg, rgba(13,20,38,.5), rgba(7,11,22,.32)); transition:border-color .2s, box-shadow .2s, transform .2s; }
+    .systems div:hover{ border-color:var(--hair2); box-shadow:0 0 22px rgba(98,224,255,.1); transform:translateY(-2px); }
+    .systems strong{ display:block; font-family:var(--display); font-weight:600; font-size:14px; margin:6px 0 6px; }
+    .systems span:not(.tlabel){ display:block; color:var(--soft); font-size:11.5px; line-height:1.4; }
+    .systems .tlabel{ color:var(--cyan); }
+
+    .profiles{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+    .profile{ position:relative; display:flex; gap:14px; align-items:flex-start; border:1px solid var(--hair); border-radius:16px; padding:16px; background:linear-gradient(180deg, rgba(13,20,38,.5), rgba(7,11,22,.32)); transition:border-color .2s, box-shadow .2s, transform .2s; }
+    .profile:hover{ border-color:var(--hair2); box-shadow:0 0 22px rgba(157,139,255,.12); transform:translateY(-2px); }
+    .profile .idx{ font-family:var(--mono); font-size:12px; color:var(--cyan); padding-top:2px; min-width:22px; }
+    .profile b{ display:block; font-family:var(--display); font-weight:600; font-size:14px; letter-spacing:-.01em; margin-bottom:4px; }
+    .profile small{ color:var(--soft); font-size:11.5px; line-height:1.4; }
+
+    .foot{ display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:64px; padding-top:20px; border-top:1px solid var(--hair); }
+    .foot .word{ font-family:var(--display); letter-spacing:.22em; font-size:13px; }
+
+    @media (max-width:980px){
+      .hero{ grid-template-columns:1fr; }
+      .systems{ grid-template-columns:repeat(2,1fr); }
+      .profiles{ grid-template-columns:repeat(2,1fr); }
+      #zone{ min-height:auto; }
+    }
+    @media (max-width:560px){
+      .shell{ width:min(100vw - 22px,1200px); }
+      .nav-note{ display:none; }
+      .controls{ grid-template-columns:1fr; }
+      .proof, .systems, .profiles{ grid-template-columns:1fr; }
+      .orbit{ width:260px; }
+    }
+    @media (prefers-reduced-motion: reduce){ .dot, .sweep, #zone::before, .stars, .stars2, .aurora, .mark::after, .fill.indeterminate{ animation:none; } }
   </style>
 </head>
 <body>
+  <div class="space stars" aria-hidden="true"></div>
+  <div class="space stars2" aria-hidden="true"></div>
+  <div class="space aurora" aria-hidden="true"></div>
+  <div class="space grid" aria-hidden="true"></div>
   <main class="shell">
-    <nav class="nav" aria-label="Product">
-      <a class="brand" href="/" aria-label="The 8D Engine home"><span class="mark">◌</span><span>The 8D Engine</span></a>
-      <div class="nav-note">Spatial Audio Mastering</div>
+    <nav class="nav" aria-label="Command bar">
+      <a class="brand" href="/" aria-label="The 8D Engine home"><span class="mark">◌</span><span class="word">THE&nbsp;8D&nbsp;ENGINE</span></a>
+      <div class="nav-right">
+        <span class="sys"><span class="pulse"></span> All systems nominal</span>
+        <span class="nav-note">Spatial Audio Mastering</span>
+      </div>
     </nav>
     <section class="hero">
       <div class="copy">
-        <div class="eyebrow"><span class="pulse"></span> Professional headphone-first render</div>
-        <h1><span class="grad">Elegant 8D masters</span> you can actually feel.</h1>
-        <p class="lede">Upload a track, choose a mastering profile, and export a polished spatial mix with felt-presence panning, mono-safe bass punch, subtle room, and clean 32-bit WAV detail.</p>
-        <div class="proof" aria-label="Reference mix findings">
-          <div><strong>7.7s</strong><span>Clean reference orbit — tighter, centered, polished motion.</span></div>
-          <div><strong>150 Hz</strong><span>Protected crossover keeps kick and sub locked center.</span></div>
-          <div><strong>0.60</strong><span>Clean reference median side/mid width target.</span></div>
+        <div class="eyebrow"><span class="pulse"></span> Orbital spatial mastering</div>
+        <h1>Spatial masters you can <span class="grad">actually feel</span>, engineered in orbit.</h1>
+        <p class="lede">Dock a track, choose a flight profile, and the engine renders a polished binaural orbit — felt-presence panning, mono-safe bass punch, subtle room, and pristine 32-bit WAV detail.</p>
+        <div class="proof" aria-label="Reference telemetry">
+          <div><span class="tlabel">Reference orbit</span><strong>7.7<i>s</i></strong><span>Tight, centered, polished motion path.</span></div>
+          <div><span class="tlabel">Bass lock</span><strong>150<i>Hz</i></strong><span>Kick &amp; sub stay mono-centered.</span></div>
+          <div><span class="tlabel">Stereo field</span><strong>0.60</strong><span>Median side/mid width target.</span></div>
         </div>
-        <div class="badges" aria-label="Processing highlights">
+        <div class="badges" aria-label="Onboard systems">
           <span class="badge">BPM aware</span>
           <span class="badge">Static cleanup</span>
-          <span class="badge">Golden Ratio motion</span>
+          <span class="badge">Golden ratio motion</span>
           <span class="badge">Fibonacci timing</span>
-          <span class="badge">Clean Reference preset</span>
-          <span class="badge">Reference Luxe preset</span>
           <span class="badge">Felt-presence panning</span>
+          <span class="badge">AI stem separation</span>
         </div>
       </div>
       <div id="zone">
+        <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
         <div class="visual" aria-hidden="true">
           <div class="orbit">
+            <span class="sweep"></span>
             <span class="dot"></span>
             <svg class="wave" viewBox="0 0 420 120" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M6 60 C34 19 64 103 96 60 C126 18 158 104 190 60 C222 17 254 103 286 60 C318 21 352 99 414 60" stroke="url(#g)" stroke-width="3" stroke-linecap="round"/>
               <path d="M20 60 H400" stroke="rgba(255,255,255,.16)" stroke-width="1" stroke-dasharray="6 12"/>
-              <defs><linearGradient id="g" x1="0" x2="420" y1="0" y2="0"><stop stop-color="#cbb7fb"/><stop offset=".55" stop-color="#76d7ff"/><stop offset="1" stop-color="#e9e5dd"/></linearGradient></defs>
+              <defs><linearGradient id="g" x1="0" x2="420" y1="0" y2="0"><stop stop-color="#a9ecff"/><stop offset=".55" stop-color="#62e0ff"/><stop offset="1" stop-color="#9d8bff"/></linearGradient></defs>
             </svg>
           </div>
         </div>
         <div class="zone-copy">
-          <div class="kicker">Import audio</div>
+          <div class="kicker">Docking bay // Import audio</div>
           <div class="title" id="title">Drop your track here</div>
           <div class="hint" id="hint">We analyze tempo and render a premium binaural orbit while keeping the sub-bass and kick centered. 1 hour max per upload. MP3, WAV, FLAC, M4A, and most FFmpeg-decodable files are accepted.</div>
           <div class="controls">
             <div class="field">
-              <label for="preset">Mastering profile</label>
+              <label for="preset">Flight profile</label>
               <select id="preset">
                 <option value="clean_reference" selected>Clean Reference — polished 7.7s orbit</option>
                 <option value="reference_luxe">Reference Luxe — 10.4s orbit</option>
@@ -347,32 +413,54 @@ HTML = """
               </select>
             </div>
             <div class="field">
-              <label for="stemMode">Processing mode</label>
+              <label for="stemMode">Processing core</label>
               <select id="stemMode">
                 <option value="classic" selected>Classic full-mix spatial master</option>
                 <option value="ai_stems">AI stem spatial mix — vocals/drums/bass/instruments</option>
               </select>
             </div>
-            <button onclick="document.getElementById('file').click()">Select Track</button>
+            <button class="launch" onclick="document.getElementById('file').click()">Select track</button>
           </div>
           <div class="prompt-box">
-            <label for="mixPrompt">Mix instruction chat</label>
-            <textarea id="mixPrompt" placeholder="Example: Make the 8D felt by the listener, Keep the vocal front-center, keep drums static, make guitar echoes wider."></textarea>
-            <p class="prompt-help">Prompt the spatial renderer before upload. Current master-file controls can anchor vocal/body, protect bass/drums, widen guitars/ambience/highs, add felt-presence panning, adjust room, cleanup, and overall motion.</p>
+            <label for="mixPrompt">Mix command console</label>
+            <textarea id="mixPrompt" placeholder="Example: Make the 8D felt by the listener, keep the vocal front-center, keep drums static, make guitar echoes wider."></textarea>
+            <p class="prompt-help">Prompt the spatial renderer before upload. Controls can anchor vocal/body, protect bass/drums, widen guitars/ambience/highs, add felt-presence panning, adjust room, cleanup, and overall motion.</p>
           </div>
           <input id="file" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.aiff">
           <div class="bar" id="bar"><div class="fill"></div></div>
-          <div class="status-card"><div class="status" id="status">Ready for upload.</div></div>
+          <div class="status-card"><span class="tlabel">Telemetry</span><div class="status" id="status">Standby · Ready for upload.</div></div>
         </div>
       </div>
     </section>
-    <section class="signal" aria-label="Signal chain">
-      <div><strong>64-bit DSP</strong><span>High precision internal processing before export.</span></div>
-      <div><strong>Mono-safe bass</strong><span>Sub and kick remain centered below 150 Hz.</span></div>
-      <div><strong>Binaural orbit</strong><span>ITD, ILD, rear shading, and smooth azimuth motion.</span></div>
-      <div><strong>Felt presence</strong><span>Pinna-air cues and centered tactile punch make motion more perceivable.</span></div>
-      <div><strong>32-bit WAV</strong><span>Float export keeps detail and avoids brittle renders.</span></div>
+
+    <div class="section-head"><h2>Onboard signal chain</h2><span class="tlabel">Core systems</span></div>
+    <section class="systems" aria-label="Signal chain">
+      <div><span class="tlabel">DSP</span><strong>64-bit core</strong><span>High-precision internal processing before export.</span></div>
+      <div><span class="tlabel">Low end</span><strong>Mono-safe bass</strong><span>Sub and kick stay centered below 150 Hz.</span></div>
+      <div><span class="tlabel">Motion</span><strong>Binaural orbit</strong><span>ITD, ILD, rear shading, smooth azimuth motion.</span></div>
+      <div><span class="tlabel">Feel</span><strong>Felt presence</strong><span>Pinna-air cues and centered tactile punch.</span></div>
+      <div><span class="tlabel">Export</span><strong>32-bit WAV</strong><span>Float export keeps detail, avoids brittle renders.</span></div>
     </section>
+
+    <div class="section-head"><h2>Eleven mastering orbits</h2><span class="tlabel">Flight profiles</span></div>
+    <section class="profiles" aria-label="Flight profiles">
+      <div class="profile"><span class="idx">01</span><div><b>Clean Reference</b><small>Polished 7.7s orbit — tight and centered.</small></div></div>
+      <div class="profile"><span class="idx">02</span><div><b>Reference Luxe</b><small>Expansive 10.4s premium orbit.</small></div></div>
+      <div class="profile"><span class="idx">03</span><div><b>Golden Ratio Reference</b><small>φ-timed orbit for organic motion.</small></div></div>
+      <div class="profile"><span class="idx">04</span><div><b>Fibonacci Spiral</b><small>Golden-angle spiral path.</small></div></div>
+      <div class="profile"><span class="idx">05</span><div><b>Golden Figure 8</b><small>φ front/back sweep.</small></div></div>
+      <div class="profile"><span class="idx">06</span><div><b>Lucas Breath</b><small>Slow Fibonacci halo motion.</small></div></div>
+      <div class="profile"><span class="idx">07</span><div><b>Fireflies Plus</b><small>Smooth premium orbit shimmer.</small></div></div>
+      <div class="profile"><span class="idx">08</span><div><b>Cinematic Halo</b><small>Elegant atmospheric surround.</small></div></div>
+      <div class="profile"><span class="idx">09</span><div><b>Figure 8</b><small>Front/back immersive sweep.</small></div></div>
+      <div class="profile"><span class="idx">10</span><div><b>Wide Orbit</b><small>Powerful chorus-width motion.</small></div></div>
+      <div class="profile"><span class="idx">11</span><div><b>Vocal Safe</b><small>Clear center, gentle motion.</small></div></div>
+    </section>
+
+    <footer class="foot">
+      <span class="word">THE 8D ENGINE</span>
+      <span class="tlabel">64-bit DSP · Mono-safe bass · 32-bit WAV export</span>
+    </footer>
   </main>
 <script>
 const zone = document.getElementById('zone');
