@@ -34,3 +34,6 @@ dist/
 # Logs/temp
 *.log
 /tmp/
+
+# Claude Code tool state
+.claude/
