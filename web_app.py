@@ -473,12 +473,35 @@ const preset = document.getElementById('preset');
 const stemMode = document.getElementById('stemMode');
 const mixPrompt = document.getElementById('mixPrompt');
 
-['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('hover'); title.textContent='Release to master'; }));
-['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('hover'); if (!file.files.length) title.textContent='Drop your track here'; }));
-zone.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) upload(f); });
-file.addEventListener('change', e => { const f = e.target.files[0]; if (f) upload(f); });
+// ── DSP availability check ───────────────────────────────────────────────────
+let DSP_OK = true;
+(async () => {
+  try {
+    const r = await fetch('/health');
+    const d = await r.json();
+    DSP_OK = d.dsp_available;
+    if (!DSP_OK) {
+      document.querySelector('.kicker').textContent = 'Cloud preview · DSP offline';
+      title.textContent = 'Run locally to master tracks';
+      hint.textContent = 'This deployment is a UI preview only. For full spatial mastering, run the engine on your own machine: python -m uvicorn web_app:app --port 8765';
+      statusEl.textContent = 'DSP stack not loaded in this environment.\nAudio rendering requires a local server with the full dependencies installed.\n\nRun locally:\npython -m uvicorn web_app:app --port 8765 --reload';
+      const btn = document.querySelector('button.launch');
+      btn.textContent = 'Unavailable in cloud preview';
+      btn.disabled = true;
+      btn.style.opacity = '0.35';
+      btn.style.cursor = 'not-allowed';
+      btn.onclick = null;
+    }
+  } catch(e) {}
+})();
+
+['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); if (DSP_OK) zone.classList.add('hover'); title.textContent = DSP_OK ? 'Release to master' : 'Run locally to master tracks'; }));
+['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('hover'); if (!file.files.length) title.textContent = DSP_OK ? 'Drop your track here' : 'Run locally to master tracks'; }));
+zone.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f && DSP_OK) upload(f); });
+file.addEventListener('change', e => { const f = e.target.files[0]; if (f && DSP_OK) upload(f); });
 
 async function upload(f) {
+  if (!DSP_OK) return;
   title.textContent = 'Uploading…';
   hint.textContent = f.name;
   statusEl.textContent = 'Preparing secure upload…';
@@ -500,9 +523,11 @@ async function upload(f) {
     document.querySelector('.fill').classList.add('indeterminate');
     await pollJob(json.job_id);
   } catch (err) {
-    title.textContent = 'Master failed';
-    hint.textContent = 'Try another audio file or a shorter upload if the tunnel times out.';
-    statusEl.textContent = String(err);
+    title.textContent = 'Render failed';
+    hint.textContent = 'Check that the file is a valid audio format and try again.';
+    let msg = err.message || String(err);
+    try { const d = JSON.parse(msg); if (d.detail) msg = d.detail; } catch(_) {}
+    statusEl.textContent = msg;
   } finally {
     bar.style.display = 'none';
   }
@@ -527,7 +552,7 @@ function xhrUpload(url, formData, onProgress) {
 async function pollJob(jobId) {
   while (true) {
     const res = await fetch(`/jobs/${jobId}`);
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) { let t = await res.text(); try { const d = JSON.parse(t); if (d.detail) t = d.detail; } catch(_) {} throw new Error(t); }
     const job = await res.json();
     if (job.status === 'complete') {
       title.textContent = 'Spatial master ready';
