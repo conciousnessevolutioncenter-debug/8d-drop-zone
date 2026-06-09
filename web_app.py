@@ -362,7 +362,7 @@ HTML = """
     <section class="hero">
       <div class="copy">
         <div class="eyebrow"><span class="pulse"></span> Orbital spatial mastering</div>
-        <h1>Spatial masters you can <span class="grad">actually feel</span>, engineered in orbit.</h1>
+        <h1>Spatial masters engineered <span class="grad">in the ethers</span>, tuned for depth, dimension, and soul level resonance.</h1>
         <p class="lede">Dock a track, choose a flight profile, and the engine renders a polished binaural orbit — felt-presence panning, mono-safe bass punch, subtle room, and pristine 32-bit WAV detail.</p>
         <div class="proof" aria-label="Reference telemetry">
           <div><span class="tlabel">Reference orbit</span><strong>7.7<i>s</i></strong><span>Tight, centered, polished motion path.</span></div>
