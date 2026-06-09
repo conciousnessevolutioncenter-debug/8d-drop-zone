@@ -34,7 +34,7 @@ except ImportError:
 
 APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
-MAX_UPLOAD_SECONDS = 20 * 60
+MAX_UPLOAD_SECONDS = 60 * 60
 MAX_UPLOAD_MINUTES = MAX_UPLOAD_SECONDS // 60
 JOBS = {}
 JOBS_LOCK = Lock()
@@ -328,7 +328,7 @@ HTML = """
         <div class="zone-copy">
           <div class="kicker">Import audio</div>
           <div class="title" id="title">Drop your track here</div>
-          <div class="hint" id="hint">We analyze tempo and render a premium binaural orbit while keeping the sub-bass and kick centered. 20 minutes max per upload. MP3, WAV, FLAC, M4A, and most FFmpeg-decodable files are accepted.</div>
+          <div class="hint" id="hint">We analyze tempo and render a premium binaural orbit while keeping the sub-bass and kick centered. 1 hour max per upload. MP3, WAV, FLAC, M4A, and most FFmpeg-decodable files are accepted.</div>
           <div class="controls">
             <div class="field">
               <label for="preset">Mastering profile</label>
