@@ -1,9 +1,5 @@
-numpy>=1.24
-scipy>=1.10
-soundfile>=0.12
-pydub>=0.25
-librosa>=0.10
-tkinterdnd2>=0.3.0
-pytest>=8.0
-pyinstaller>=6.0
-demucs>=4.0
+# Vercel / serverless deployment — lightweight serving layer only.
+# For local development with full DSP stack, use: pip install -r requirements-local.txt
+fastapi>=0.100
+uvicorn[standard]>=0.23
+python-multipart>=0.0.7

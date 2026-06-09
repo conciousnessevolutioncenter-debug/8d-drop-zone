@@ -12,15 +12,25 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from eightd_engine.audio_io import export_audio, load_audio
-from eightd_engine.dsp import analyze_correlation, bpm_to_premium_rotation_cpm, estimate_bpm, panning_preset_names, process_8d
-from eightd_engine.stems import (
-    StemData,
-    StemSeparationUnavailable,
-    available_stem_mode,
-    process_stem_spatial_mix,
-    separate_stems_from_file,
-)
+try:
+    from eightd_engine.audio_io import export_audio, load_audio
+    from eightd_engine.dsp import (
+        analyze_correlation,
+        bpm_to_premium_rotation_cpm,
+        estimate_bpm,
+        panning_preset_names,
+        process_8d,
+    )
+    from eightd_engine.stems import (
+        StemData,
+        StemSeparationUnavailable,
+        available_stem_mode,
+        process_stem_spatial_mix,
+        separate_stems_from_file,
+    )
+    DSP_AVAILABLE = True
+except ImportError:
+    DSP_AVAILABLE = False
 
 APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -592,8 +602,22 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
     except Exception as exc:
         _set_job(job_id, status="failed", message="Render failed.", error=str(exc))
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "dsp_available": DSP_AVAILABLE}
+
+
 @app.post("/convert")
 async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe"), mix_prompt: str = Form(""), stem_mode: str = Form("classic")):
+    if not DSP_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Audio rendering is not available in this cloud environment — "
+                "the DSP stack (numpy/scipy/librosa/demucs) requires a long-lived server. "
+                "Run the app locally for full rendering: python -m uvicorn web_app:app --port 8765"
+            ),
+        )
     suffix = Path(file.filename or "audio").suffix.lower() or ".audio"
     safe_stem = Path(file.filename or "audio").stem.replace("/", "_").replace("\\", "_")[:80]
     job_id = uuid.uuid4().hex[:12]
