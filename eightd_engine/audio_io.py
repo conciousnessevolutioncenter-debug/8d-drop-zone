@@ -39,7 +39,7 @@ def load_audio(path: str | Path) -> AudioData:
     try:
         import soundfile as sf  # type: ignore
 
-        samples, sample_rate = sf.read(str(src), always_2d=True, dtype="float64")
+        samples, sample_rate = sf.read(str(src), always_2d=True, dtype="float32")
         return AudioData(samples=ensure_stereo_float(samples), sample_rate=int(sample_rate))
     except Exception as sf_error:
         if src.suffix.lower() == ".wav":
