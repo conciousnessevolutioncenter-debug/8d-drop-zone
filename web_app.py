@@ -10,6 +10,7 @@ from threading import Lock
 from dataclasses import dataclass
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -50,6 +51,17 @@ JOBS_LOCK = Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 app = FastAPI(title="The 8D Engine")
+
+# Allow any origin to call the API directly.
+# This lets the Vercel front-end (and local dev) bypass the proxy and talk to
+# Railway in a single hop — critical for large audio uploads and fast downloads.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 app.mount("/files", StaticFiles(directory=str(APP_DIR)), name="files")
 
 
@@ -482,11 +494,21 @@ const preset = document.getElementById('preset');
 const stemMode = document.getElementById('stemMode');
 const mixPrompt = document.getElementById('mixPrompt');
 
-// ── DSP availability check ───────────────────────────────────────────────────
+// ── Direct API routing ────────────────────────────────────────────────────────
+// Uploads and downloads go straight to Railway, skipping the Vercel proxy.
+// Benefits:
+//   • No 4.5 MB Vercel body-size limit — files of any size upload cleanly
+//   • One network hop instead of two — faster upload AND download
+//   • Real-time XHR progress works correctly (no proxy buffering)
+// Local dev uses the same origin so relative paths work unchanged.
+const IS_DEV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const API = IS_DEV ? '' : 'https://luminous-endurance-production-0696.up.railway.app';
+
+// ── DSP availability check ────────────────────────────────────────────────────
 let DSP_OK = true;
 (async () => {
   try {
-    const r = await fetch('/health');
+    const r = await fetch(`${API}/health`);
     const d = await r.json();
     DSP_OK = d.dsp_available;
     if (!DSP_OK) {
@@ -512,9 +534,10 @@ file.addEventListener('change', e => { const f = e.target.files[0]; if (f && DSP
 
 async function upload(f) {
   if (!DSP_OK) return;
+  const mb = (f.size / 1048576).toFixed(1);
   title.textContent = 'Uploading…';
-  hint.textContent = f.name;
-  statusEl.textContent = 'Preparing secure upload…';
+  hint.textContent = `${f.name} · ${mb} MB`;
+  statusEl.textContent = 'Sending directly to the mastering engine…';
   bar.style.display = 'block';
   document.querySelector('.fill').style.width = '0%';
   document.querySelector('.fill').classList.remove('indeterminate');
@@ -524,12 +547,12 @@ async function upload(f) {
   data.append('stem_mode', stemMode.value);
   data.append('mix_prompt', mixPrompt.value.trim());
   try {
-    const json = await xhrUpload('/convert', data, pct => {
-      statusEl.textContent = `Uploading: ${pct}%`;
+    const json = await xhrUpload(`${API}/convert`, data, pct => {
+      statusEl.textContent = `Uploading: ${pct}% of ${mb} MB`;
       document.querySelector('.fill').style.width = `${pct}%`;
     });
     title.textContent = 'Rendering spatial master…';
-    statusEl.textContent = 'Upload complete. Tempo analysis, optional stem separation, cleanup, panning, room, and phase guard are running now.';
+    statusEl.textContent = 'Upload complete. Tempo analysis, cleanup, binaural panning, room, and phase guard running now.';
     document.querySelector('.fill').classList.add('indeterminate');
     await pollJob(json.job_id);
   } catch (err) {
@@ -554,24 +577,26 @@ function xhrUpload(url, formData, onProgress) {
       if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(xhr.responseText));
       resolve(JSON.parse(xhr.responseText));
     };
-    xhr.onerror = () => reject(new Error('Network upload failed'));
+    xhr.onerror = () => reject(new Error('Upload failed — check your connection and try again'));
     xhr.send(formData);
   });
 }
 
 async function pollJob(jobId) {
   while (true) {
-    const res = await fetch(`/jobs/${jobId}`);
+    const res = await fetch(`${API}/jobs/${jobId}`);
     if (!res.ok) { let t = await res.text(); try { const d = JSON.parse(t); if (d.detail) t = d.detail; } catch(_) {} throw new Error(t); }
     const job = await res.json();
     if (job.status === 'complete') {
       title.textContent = 'Spatial master ready';
-      hint.innerHTML = `<a href="${job.download_url}" download>Download ${job.output_name}</a>`;
-      statusEl.textContent = `Profile: ${job.preset}\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\nPrompt: ${job.mix_notes || 'Selected profile only'}\nBPM: ${job.bpm}\nOrbit: ${job.rotation_cpm} cycles/min\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
+      // Download URL is relative to Railway — prepend API base for a direct link.
+      const dlUrl = job.download_url.startsWith('http') ? job.download_url : `${API}${job.download_url}`;
+      hint.innerHTML = `<a href="${dlUrl}" download>⬇ Download ${job.output_name}</a>`;
+      statusEl.textContent = `Profile: ${job.preset}\\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\\nPrompt: ${job.mix_notes || 'Selected profile only'}\\nBPM: ${job.bpm}\\nOrbit: ${job.rotation_cpm} cycles/min\\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
       return;
     }
     if (job.status === 'failed') throw new Error(job.error || 'Render failed');
-    statusEl.textContent = `${job.message || 'Rendering…'}\nYou can leave this tab open until the download link appears.`;
+    statusEl.textContent = `${job.message || 'Rendering…'}\\nYou can leave this tab open until the download link appears.`;
     await new Promise(r => setTimeout(r, 1500));
   }
 }
