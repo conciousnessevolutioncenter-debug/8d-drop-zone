@@ -490,12 +490,12 @@ let DSP_OK = true;
     const d = await r.json();
     DSP_OK = d.dsp_available;
     if (!DSP_OK) {
-      document.querySelector('.kicker').textContent = 'UI preview · deploy on Railway to master';
-      title.textContent = 'Deploy to Railway for full mastering';
-      hint.textContent = 'This Vercel build is a UI preview. To master tracks in the cloud, deploy the engine to Railway (railway.app) — it runs the full DSP stack with no file-size or execution-time limits.';
-      statusEl.textContent = 'DSP offline on this Vercel preview.\\n\\nTo run in the cloud: deploy to railway.app — connect your GitHub repo and Railway handles the rest.\\n\\nTo run locally: python -m uvicorn web_app:app --port 8765';
+      document.querySelector('.kicker').textContent = 'Engine offline · try again shortly';
+      title.textContent = 'Processing engine offline';
+      hint.textContent = 'The spatial mastering engine is temporarily unavailable. Please try again in a few minutes, or run the engine locally.';
+      statusEl.textContent = 'Engine offline.\\n\\nTo run locally: python -m uvicorn web_app:app --port 8765';
       const btn = document.querySelector('button.launch');
-      btn.textContent = 'Deploy to Railway to enable';
+      btn.textContent = 'Engine unavailable';
       btn.disabled = true;
       btn.style.opacity = '0.35';
       btn.style.cursor = 'not-allowed';

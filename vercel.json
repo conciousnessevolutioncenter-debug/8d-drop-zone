@@ -7,6 +7,10 @@
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "web_app.py" }
+    { "src": "/health",      "dest": "https://luminous-endurance-production-0696.up.railway.app/health" },
+    { "src": "/convert",     "dest": "https://luminous-endurance-production-0696.up.railway.app/convert" },
+    { "src": "/jobs/(.*)",   "dest": "https://luminous-endurance-production-0696.up.railway.app/jobs/$1" },
+    { "src": "/files/(.*)",  "dest": "https://luminous-endurance-production-0696.up.railway.app/files/$1" },
+    { "src": "/(.*)",        "dest": "web_app.py" }
   ]
 }
