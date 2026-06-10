@@ -591,10 +591,16 @@ def _set_job(job_id: str, **updates):
         job["updated_at"] = time.time()
 
 def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = "", stem_mode: str = "classic"):
+    import time as _time
+    _t0 = _time.time()
+    def _log(msg: str) -> None:
+        print(f"[8D {job_id}] +{_time.time()-_t0:.1f}s {msg}", flush=True)
     try:
+        _log(f"start preset={preset} stem_mode={stem_mode}")
         _set_job(job_id, status="processing", message="Analyzing BPM…")
         audio = load_audio(src)
         duration_seconds = len(audio.samples) / float(audio.sample_rate or 1)
+        _log(f"loaded {duration_seconds:.1f}s audio, sr={audio.sample_rate}")
         if duration_seconds > MAX_UPLOAD_SECONDS:
             raise ValueError(
                 f"Track is {duration_seconds / 60.0:.1f} minutes long. "
@@ -634,6 +640,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         instruction_result = apply_mix_instructions(settings, mix_prompt)
         settings = instruction_result.settings
         mix_notes = " | ".join(instruction_result.notes) if instruction_result.notes else "Selected profile only"
+        _log(f"BPM={bpm:.1f} cpm={rotation_cpm:.2f} denoise={settings.get('denoise_amount', 0):.2f} center_focus={settings.get('center_focus', 0):.2f}")
         _set_job(
             job_id,
             message="Cleaning static, then rendering premium spatial master…",
@@ -684,6 +691,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                     felt_presence=settings["felt_presence"],
                 )
         else:
+            _log("calling process_8d (classic)")
             rendered = process_8d(
                 audio,
                 rotation_cpm=rotation_cpm,
@@ -700,7 +708,9 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                 center_focus=settings["center_focus"],
                 felt_presence=settings["felt_presence"],
             )
+            _log("process_8d complete")
         _set_job(job_id, message="Writing WAV export…")
+        _log("exporting WAV")
         report = analyze_correlation(rendered.samples)
         export_audio(rendered, out)
         _set_job(
@@ -722,7 +732,11 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             stem_engine=stem_engine,
             stem_count=stem_count,
         )
+        _log("job complete")
     except Exception as exc:
+        import traceback
+        _log(f"FAILED: {exc}")
+        traceback.print_exc()
         _set_job(job_id, status="failed", message="Render failed.", error=str(exc))
 
 @app.get("/health")
