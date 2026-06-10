@@ -1,6 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "https://luminous-endurance-production-0696.up.railway.app/$1" }
+  "builds": [
+    {
+      "src": "web_app.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "web_app.py" }
   ]
 }
