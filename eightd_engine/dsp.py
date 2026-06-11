@@ -995,6 +995,74 @@ def _process_8d_core(
     return AudioData(samples=mixed.astype(np.float32), sample_rate=audio.sample_rate)
 
 
+def _max_abs_chunked(x: np.ndarray, step: int = 1 << 20) -> float:
+    """Peak |sample| without allocating a full-length abs() copy."""
+    n = len(x)
+    if n == 0:
+        return 0.0
+    peak = 0.0
+    for i in range(0, n, step):
+        seg_peak = float(np.abs(x[i:i + step]).max())
+        if seg_peak > peak:
+            peak = seg_peak
+    return peak
+
+
+def _rms_chunked(x: np.ndarray, step: int = 1 << 20) -> float:
+    """RMS amplitude with a float64 accumulator but only chunk-sized temporaries."""
+    n = x.shape[0] if x.ndim else 0
+    if n == 0:
+        return 0.0
+    total = 0.0
+    count = 0
+    for i in range(0, n, step):
+        seg = np.asarray(x[i:i + step], dtype=np.float64)
+        total += float(np.sum(seg * seg))
+        count += seg.size
+    return float(np.sqrt(total / max(1, count) + 1e-18))
+
+
+def _master_inplace(out: np.ndarray, ref_rms: float, youtube_master: bool, preserve_quality: bool) -> None:
+    """Apply the single global master gain to ``out`` IN PLACE.
+
+    This is the memory-frugal twin of :func:`_final_master` used by the blocked
+    long-track path.  It computes the peak/RMS with chunked passes (no
+    full-length abs() or float64 copies) and scales ``out`` with ``*=`` instead
+    of allocating a new full-length result, which is what previously spiked RAM
+    past the container limit at the very end of a long render.
+    """
+    n = len(out)
+    if n == 0:
+        return
+    if youtube_master:
+        cur = _rms_chunked(out)
+        if cur <= 1e-12:
+            return
+        gained = db_to_linear(-13.0) / cur
+        peak_after = _max_abs_chunked(out) * gained
+        ceiling = db_to_linear(-1.0)
+        if peak_after > ceiling and peak_after > 0.0:
+            gained *= ceiling / peak_after
+        if gained != 1.0:
+            out *= np.float32(gained)
+        return
+    if preserve_quality:
+        peak = _max_abs_chunked(out)
+        peak_ceiling = db_to_linear(-1.0)
+        peak_gain = (peak_ceiling / peak) if peak > peak_ceiling and peak > 0.0 else 1.0
+        out_rms = _rms_chunked(out)
+        max_rms = ref_rms * db_to_linear(0.25)
+        rms_gain = (max_rms / out_rms) if out_rms > max_rms and out_rms > 0.0 else 1.0
+        gain = min(peak_gain, rms_gain, 1.0)
+        if gain != 1.0:
+            out *= np.float32(gain)
+        return
+    # default: peak-normalize to 0.98 ceiling
+    peak = _max_abs_chunked(out)
+    if peak > 0.98 and peak > 0.0:
+        out *= np.float32(0.98 / peak)
+
+
 def _final_master(mixed: np.ndarray, reference: np.ndarray, youtube_master: bool, preserve_quality: bool) -> np.ndarray:
     """Apply the single global peak/RMS master guard (run once per render)."""
     if youtube_master:
@@ -1007,7 +1075,9 @@ def _final_master(mixed: np.ndarray, reference: np.ndarray, youtube_master: bool
 # A track longer than this many seconds is rendered in overlapping blocks so peak
 # RAM stays flat regardless of length (a 5-minute single-pass render peaks ~1.5 GB
 # and OOM-kills a ~1 GB container; block rendering holds it well under that).
-_BLOCK_SECONDS = 60
+# A smaller block shrinks the per-block working set (the orbit/center/reverb
+# stages hold ~10 arrays of one block each), trading a little speed for headroom.
+_BLOCK_SECONDS = 20
 _BLOCK_PAD_SECONDS = 2.0
 
 
@@ -1063,6 +1133,11 @@ def process_8d(
     if n <= block + 2 * pad:
         return _process_8d_core(AudioData(samples=samples, sample_rate=sr), **params)
 
+    # Reference loudness for the final master, captured as a scalar up front so
+    # the full-length source array can be released before mastering (the master
+    # then needs only the output buffer, not a second full-length array).
+    ref_rms = _rms_chunked(samples)
+
     out = np.empty((n, 2), dtype=np.float32)
     pos = 0
     while pos < n:
@@ -1081,6 +1156,8 @@ def process_8d(
         del segment, rendered
         pos = end
 
-    out = _final_master(out, samples, youtube_master, preserve_quality)
-    del samples
-    return AudioData(samples=out.astype(np.float32, copy=False), sample_rate=sr)
+    del samples  # free the full-length source before mastering
+    # In-place master (chunked stats, no full-length temporaries) keeps the tail
+    # of a long render from spiking RAM past the container limit.
+    _master_inplace(out, ref_rms, youtube_master, preserve_quality)
+    return AudioData(samples=out, sample_rate=sr)
