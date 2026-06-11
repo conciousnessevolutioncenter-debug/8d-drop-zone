@@ -1,2 +1,5 @@
+# Install ffmpeg via apt so Nixpacks' auto-detected Python setup is preserved.
+# Using [phases.setup] nixPkgs would REPLACE the default nix packages (including
+# Python), which breaks `pip install` with "python: command not found".
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+aptPkgs = ["ffmpeg"]
