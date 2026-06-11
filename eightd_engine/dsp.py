@@ -269,6 +269,37 @@ def _fft_split_mono(mono: np.ndarray, sample_rate: int, crossover_hz: float) -> 
     return low, high
 
 
+def _sosfiltfilt_chunked(sos, x: np.ndarray, chunk: int = 1 << 20, pad: int = 1 << 14) -> np.ndarray:
+    """Memory-bounded zero-phase IIR filter (overlap-save).
+
+    scipy.signal.sosfiltfilt promotes the entire signal to float64 and allocates
+    several full-length temporaries.  On a 5-minute, 48 kHz track that spikes RAM
+    past 1 GB and OOM-kills small containers.  This processes the signal in
+    `chunk`-sample windows with `pad` samples of real context on each side (the
+    pad output is discarded).  The Butterworth IRs used here settle in well under
+    `pad` samples, so the kept center region is numerically identical to filtering
+    the whole signal at once — no seams, no audible difference.
+    """
+    from scipy.signal import sosfiltfilt  # type: ignore
+
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    n = len(x)
+    if n <= chunk + 2 * pad:
+        return sosfiltfilt(sos, x).astype(np.float32, copy=False)
+    out = np.empty(n, dtype=np.float32)
+    start = 0
+    while start < n:
+        end = min(start + chunk, n)
+        lo = max(0, start - pad)
+        hi = min(n, end + pad)
+        seg = np.ascontiguousarray(x[lo:hi], dtype=np.float32)
+        filt = sosfiltfilt(sos, seg).astype(np.float32, copy=False)
+        out[start:end] = filt[start - lo: start - lo + (end - start)]
+        del seg, filt
+        start = end
+    return out
+
+
 def _split_at_hz(mono: np.ndarray, sample_rate: int, hz: float) -> Tuple[np.ndarray, np.ndarray]:
     """Memory-efficient IIR frequency split (scipy first, FFT fallback).
 
@@ -289,7 +320,7 @@ def _split_at_hz(mono: np.ndarray, sample_rate: int, hz: float) -> Tuple[np.ndar
         cutoff = float(np.clip(hz / nyquist, 1e-5, 0.999))
         sos = butter(4, cutoff, btype="lowpass", output="sos")
         m = np.ascontiguousarray(mono, dtype=np.float32)
-        low = sosfiltfilt(sos, m).astype(np.float32, copy=False)
+        low = _sosfiltfilt_chunked(sos, m)
         return low, (m - low)
     except Exception:
         return _fft_split_mono(mono, sample_rate, hz)
@@ -315,7 +346,7 @@ def split_bass_motion(
         nyquist = sample_rate * 0.5
         cutoff = min(max(crossover_hz / nyquist, 1e-5), 0.999)
         sos_low = butter(4, cutoff, btype="lowpass", output="sos")
-        low_mono = sosfiltfilt(sos_low, mid).astype(np.float32, copy=False)
+        low_mono = _sosfiltfilt_chunked(sos_low, mid)
     except Exception:
         low_mono, _ = _fft_split_mono(mid, sample_rate, crossover_hz)
 
@@ -429,17 +460,22 @@ def high_frequency_emphasis(
     return emphasized
 
 
-def section_automation_curve(num_frames: int, sample_rate: int) -> np.ndarray:
+def section_automation_curve(num_frames: int, sample_rate: int, start_frame: int = 0, total_frames: int | None = None) -> np.ndarray:
     """Arrangement-aware motion curve: intro subtle, chorus strong, outro dreamy.
 
     Without stem/section detection, this uses normalized song position as a
     musical default. It ramps in, peaks in chorus-like middle/final sections, and
     keeps the outro wide but slightly softer than the biggest chorus.
+
+    ``start_frame``/``total_frames`` describe this segment's place within the
+    whole track so the curve stays identical whether the song is rendered in one
+    pass or in memory-bounded blocks.
     """
 
     if num_frames <= 0:
         return np.zeros(0, dtype=np.float32)
-    pos = np.linspace(0.0, 1.0, num_frames, endpoint=False, dtype=np.float32)
+    total = int(total_frames) if total_frames else num_frames
+    pos = ((np.arange(num_frames, dtype=np.float64) + float(start_frame)) / float(total)).astype(np.float32)
     points_x = np.array([0.0, 0.08, 0.22, 0.40, 0.62, 0.82, 0.92, 1.0], dtype=np.float32)
     points_y = np.array([0.45, 0.62, 0.82, 1.05, 1.10, 1.00, 0.92, 0.85], dtype=np.float32)
     curve = np.interp(pos, points_x, points_y).astype(np.float32)
@@ -456,13 +492,18 @@ def section_automation_curve(num_frames: int, sample_rate: int) -> np.ndarray:
     return np.clip(curve, 0.35, 1.15).astype(np.float32)
 
 
-def reduce_static_noise(samples: np.ndarray, sample_rate: int, amount: float = 0.65) -> np.ndarray:
+def reduce_static_noise(samples: np.ndarray, sample_rate: int, amount: float = 0.65, loudness_match: bool = True) -> np.ndarray:
     """Gently reduce steady hiss/static before spatial rendering.
 
     The cleaner is intentionally conservative: it combines a light spectral gate
     with a tiny impulse de-crackle stage. It is designed for already-mastered
     songs where the goal is removing static while preserving transients, vocal
     clarity, stereo tone, and musical brightness.
+
+    ``loudness_match`` applies a global peak/RMS guard at the end. It is disabled
+    when the track is rendered in blocks (the guard depends on whole-file
+    statistics, which would differ per block and create seams); a single global
+    normalization is applied once to the assembled output instead.
     """
 
     amt = float(np.clip(amount, 0.0, 1.0))
@@ -489,7 +530,7 @@ def reduce_static_noise(samples: np.ndarray, sample_rate: int, amount: float = 0
             # ascontiguousarray is essential: column slices are non-contiguous
             # and scipy's C-level routines may hang or silently misbehave on them.
             x = np.ascontiguousarray(stereo[:, ch], dtype=np.float32)
-            high = sosfiltfilt(sos, x).astype(np.float32, copy=False)
+            high = _sosfiltfilt_chunked(sos, x)
             cleaned[:, ch] = (x - high * blend)
             del x, high
     except Exception:
@@ -498,6 +539,8 @@ def reduce_static_noise(samples: np.ndarray, sample_rate: int, amount: float = 0
             cleaned[:, ch] = (low + high * (1.0 - 0.28 * amt)).astype(np.float32)
             del low, high
 
+    if not loudness_match:
+        return cleaned
     return preserve_loudness_and_peak(cleaned, stereo, peak_ceiling_db=-1.0, max_rms_lift_db=0.0)
 
 
@@ -666,13 +709,22 @@ def _azimuth_series(
     sample_rate: int,
     rotation_cpm: float,
     panning_preset: str = "fireflies_plus",
+    start_frame: int = 0,
 ) -> np.ndarray:
-    """Generate one azimuth degree per sample for smooth musical orbit presets."""
+    """Generate one azimuth degree per sample for smooth musical orbit presets.
+
+    ``start_frame`` is the absolute sample index of the first frame. It lets the
+    track be rendered in memory-bounded blocks while keeping one continuous,
+    seamless orbit across block boundaries (the rotation phase is a function of
+    absolute time, not of position within a block).
+    """
 
     cycles_per_second = max(0.01, float(rotation_cpm) / 60.0)
     # float32 halves the size of per-sample angular arrays (e.g. 80 MB → 40 MB
     # for a 5-minute track); angular precision loss is < 0.001° — inaudible.
-    t = np.arange(num_frames, dtype=np.float32) / np.float32(sample_rate)
+    # The absolute index is built in float64 first so large start offsets keep
+    # full integer precision, then the per-sample time is stored as float32.
+    t = ((np.arange(num_frames, dtype=np.float64) + float(start_frame)) / float(sample_rate)).astype(np.float32)
     orbit_phase = (t * np.float32(cycles_per_second)) % np.float32(1.0)
     base = t * np.float32(cycles_per_second) * np.float32(360.0)
     preset = panning_preset if panning_preset in PANNING_PRESETS else "fireflies_plus"
@@ -775,6 +827,7 @@ def binaural_orbit(
     automation_curve: np.ndarray | None = None,
     panning_preset: str = "fireflies_plus",
     block_size: int = 1024,
+    start_frame: int = 0,
 ) -> np.ndarray:
     """Render the motion band as a rotating binaural-ish source.
 
@@ -794,7 +847,7 @@ def binaural_orbit(
         return np.zeros((0, 2), dtype=np.float32)
 
     # All angular/gain arrays use float32 — halves per-sample array footprint.
-    azimuths = _azimuth_series(n, sample_rate, rotation_cpm, panning_preset=panning_preset)
+    azimuths = _azimuth_series(n, sample_rate, rotation_cpm, panning_preset=panning_preset, start_frame=start_frame)
     depth = np.float32(np.clip(motion_depth, 0.0, 1.5))
     if automation_curve is None:
         automation = np.ones(n, dtype=np.float32)
@@ -862,6 +915,102 @@ def split_center_focus_bands(
     return body, air
 
 
+def _process_8d_core(
+    audio: AudioData,
+    rotation_cpm: float = 6.0,
+    room_size: float = 0.15,
+    crossover_hz: float = 150.0,
+    motion_depth: float = 1.0,
+    high_emphasis: float = 0.0,
+    spatial_mix: float = 1.0,
+    denoise_amount: float = 0.0,
+    panning_preset: str = "fireflies_plus",
+    preserve_quality: bool = False,
+    youtube_master: bool = False,
+    section_automation: bool = False,
+    center_focus: float = 0.0,
+    felt_presence: float = 0.0,
+    _start_frame: int = 0,
+    _total_frames: int | None = None,
+    _do_final_normalize: bool = True,
+) -> AudioData:
+    """Render one segment of an 8D track (the whole track when called directly).
+
+    ``_start_frame``/``_total_frames`` locate this segment within the full song
+    so the orbit and arrangement automation stay continuous across blocks.
+    ``_do_final_normalize`` is False in block mode, where the final peak/RMS
+    guard is applied once to the fully assembled output instead.
+    """
+
+    samples = ensure_stereo_float(audio.samples)
+    total_frames = int(_total_frames) if _total_frames else len(samples)
+    if denoise_amount > 0.0:
+        samples = reduce_static_noise(samples, audio.sample_rate, amount=denoise_amount, loudness_match=_do_final_normalize)
+    bass, motion = split_bass_motion(samples, audio.sample_rate, crossover_hz=crossover_hz)
+    motion = high_frequency_emphasis(motion, audio.sample_rate, amount=high_emphasis)
+
+    focus = float(np.clip(center_focus, 0.0, 1.0))
+    center_anchor = np.zeros_like(motion)
+    orbit_motion = motion
+    if focus > 0.0:
+        body, air = split_center_focus_bands(motion, audio.sample_rate, focus_hz=3200.0)
+        body_center = np.column_stack([body.mean(axis=1), body.mean(axis=1)])
+        body_motion_gain = 1.0 - 0.68 * focus
+        center_anchor = body_center * (0.58 * focus)
+        orbit_motion = (air + body * body_motion_gain).astype(np.float32)
+        del body, air, body_center  # free splits — no longer needed
+
+    automation = section_automation_curve(len(samples), audio.sample_rate, start_frame=_start_frame, total_frames=total_frames) if section_automation else None
+    moving = binaural_orbit(
+        orbit_motion,
+        audio.sample_rate,
+        rotation_cpm=rotation_cpm,
+        motion_depth=motion_depth,
+        automation_curve=automation,
+        panning_preset=panning_preset,
+        start_frame=_start_frame,
+    )
+    if orbit_motion is not motion:
+        del orbit_motion  # free if it was a separate array
+
+    room_curve = automation[:, None].astype(np.float32) if automation is not None else np.float32(1.0)
+    del automation
+    room = (_simple_room_reverb(moving, audio.sample_rate, room_size) * room_curve).astype(np.float32)
+    del room_curve
+
+    wet = float(np.clip(spatial_mix, 0.0, 1.0))
+    dry_gain = 1.0 - wet
+    if preserve_quality:
+        dry_gain += (0.12 + 0.10 * focus) * wet
+    moving = (motion * np.float32(dry_gain) + center_anchor + moving * np.float32(wet)).astype(np.float32)
+    del motion, center_anchor
+
+    bass, moving = enhance_felt_presence(bass, moving, audio.sample_rate, amount=felt_presence)
+    mixed = (bass + moving + room).astype(np.float32)
+    del bass, moving, room
+
+    if _do_final_normalize:
+        mixed = _final_master(mixed, samples, youtube_master, preserve_quality)
+    del samples
+    return AudioData(samples=mixed.astype(np.float32), sample_rate=audio.sample_rate)
+
+
+def _final_master(mixed: np.ndarray, reference: np.ndarray, youtube_master: bool, preserve_quality: bool) -> np.ndarray:
+    """Apply the single global peak/RMS master guard (run once per render)."""
+    if youtube_master:
+        return apply_youtube_master_target(mixed, target_rms_db=-13.0, peak_ceiling_db=-1.0)
+    if preserve_quality:
+        return preserve_loudness_and_peak(mixed, reference, peak_ceiling_db=-1.0, max_rms_lift_db=0.25)
+    return normalize_peak(mixed, ceiling=0.98)
+
+
+# A track longer than this many seconds is rendered in overlapping blocks so peak
+# RAM stays flat regardless of length (a 5-minute single-pass render peaks ~1.5 GB
+# and OOM-kills a ~1 GB container; block rendering holds it well under that).
+_BLOCK_SECONDS = 60
+_BLOCK_PAD_SECONDS = 2.0
+
+
 def process_8d(
     audio: AudioData,
     rotation_cpm: float = 6.0,
@@ -878,73 +1027,60 @@ def process_8d(
     center_focus: float = 0.0,
     felt_presence: float = 0.0,
 ) -> AudioData:
-    """Convert a stereo track into an 8D-style headphone render."""
+    """Convert a stereo track into an 8D-style headphone render.
 
-    import time as _t
-    _t_start = _t.time()
-    def _pt(label: str) -> None:
-        print(f"  [dsp] +{_t.time()-_t_start:.2f}s {label}", flush=True)
+    Short tracks are rendered in a single pass. Long tracks are rendered in
+    overlapping time-blocks and reassembled, which keeps peak memory bounded
+    (so long songs no longer OOM-crash on memory-limited servers). The orbit and
+    arrangement automation use absolute sample positions, and the heavy filters
+    settle well within the block overlap, so the blocked output is seamless and
+    matches the single-pass render.
+    """
+
+    params = dict(
+        rotation_cpm=rotation_cpm,
+        room_size=room_size,
+        crossover_hz=crossover_hz,
+        motion_depth=motion_depth,
+        high_emphasis=high_emphasis,
+        spatial_mix=spatial_mix,
+        denoise_amount=denoise_amount,
+        panning_preset=panning_preset,
+        preserve_quality=preserve_quality,
+        youtube_master=youtube_master,
+        section_automation=section_automation,
+        center_focus=center_focus,
+        felt_presence=felt_presence,
+    )
 
     samples = ensure_stereo_float(audio.samples)
-    _pt(f"ensure_stereo n={len(samples)} sr={audio.sample_rate}")
-    if denoise_amount > 0.0:
-        samples = reduce_static_noise(samples, audio.sample_rate, amount=denoise_amount)
-        _pt("reduce_static_noise done")
-    bass, motion = split_bass_motion(samples, audio.sample_rate, crossover_hz=crossover_hz)
-    _pt("split_bass_motion done")
-    motion = high_frequency_emphasis(motion, audio.sample_rate, amount=high_emphasis)
-    _pt("high_frequency_emphasis done")
+    sr = int(audio.sample_rate)
+    n = len(samples)
+    block = _BLOCK_SECONDS * sr
+    pad = int(_BLOCK_PAD_SECONDS * sr)
 
-    focus = float(np.clip(center_focus, 0.0, 1.0))
-    center_anchor = np.zeros_like(motion)
-    orbit_motion = motion
-    if focus > 0.0:
-        body, air = split_center_focus_bands(motion, audio.sample_rate, focus_hz=3200.0)
-        body_center = np.column_stack([body.mean(axis=1), body.mean(axis=1)])
-        body_motion_gain = 1.0 - 0.68 * focus
-        center_anchor = body_center * (0.58 * focus)
-        orbit_motion = (air + body * body_motion_gain).astype(np.float32)
-        del body, air, body_center  # free splits — no longer needed
-        _pt("center_focus split done")
+    # Single-pass for short tracks: identical to the original behavior.
+    if n <= block + 2 * pad:
+        return _process_8d_core(AudioData(samples=samples, sample_rate=sr), **params)
 
-    automation = section_automation_curve(len(samples), audio.sample_rate) if section_automation else None
-    _pt("section_automation done")
-    moving = binaural_orbit(
-        orbit_motion,
-        audio.sample_rate,
-        rotation_cpm=rotation_cpm,
-        motion_depth=motion_depth,
-        automation_curve=automation,
-        panning_preset=panning_preset,
-    )
-    _pt("binaural_orbit done")
-    if orbit_motion is not motion:
-        del orbit_motion  # free if it was a separate array
+    out = np.empty((n, 2), dtype=np.float32)
+    pos = 0
+    while pos < n:
+        end = min(pos + block, n)
+        lo = max(0, pos - pad)
+        hi = min(n, end + pad)
+        segment = AudioData(samples=np.ascontiguousarray(samples[lo:hi]), sample_rate=sr)
+        rendered = _process_8d_core(
+            segment,
+            _start_frame=lo,
+            _total_frames=n,
+            _do_final_normalize=False,
+            **params,
+        ).samples
+        out[pos:end] = rendered[pos - lo: pos - lo + (end - pos)]
+        del segment, rendered
+        pos = end
 
-    room_curve = automation[:, None].astype(np.float32) if automation is not None else np.float32(1.0)
-    del automation
-    room = (_simple_room_reverb(moving, audio.sample_rate, room_size) * room_curve).astype(np.float32)
-    del room_curve
-    _pt("room_reverb done")
-
-    wet = float(np.clip(spatial_mix, 0.0, 1.0))
-    dry_gain = 1.0 - wet
-    if preserve_quality:
-        dry_gain += (0.12 + 0.10 * focus) * wet
-    moving = (motion * np.float32(dry_gain) + center_anchor + moving * np.float32(wet)).astype(np.float32)
-    del motion, center_anchor
-
-    bass, moving = enhance_felt_presence(bass, moving, audio.sample_rate, amount=felt_presence)
-    _pt("enhance_felt_presence done")
-    mixed = (bass + moving + room).astype(np.float32)
-    del bass, moving, room
-
-    if youtube_master:
-        mixed = apply_youtube_master_target(mixed, target_rms_db=-13.0, peak_ceiling_db=-1.0)
-    elif preserve_quality:
-        mixed = preserve_loudness_and_peak(mixed, samples, peak_ceiling_db=-1.0, max_rms_lift_db=0.25)
-    else:
-        mixed = normalize_peak(mixed, ceiling=0.98)
+    out = _final_master(out, samples, youtube_master, preserve_quality)
     del samples
-    _pt("process_8d COMPLETE")
-    return AudioData(samples=mixed.astype(np.float32), sample_rate=audio.sample_rate)
+    return AudioData(samples=out.astype(np.float32, copy=False), sample_rate=sr)

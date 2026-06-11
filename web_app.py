@@ -46,6 +46,8 @@ APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_SECONDS = 60 * 60
 MAX_UPLOAD_MINUTES = MAX_UPLOAD_SECONDS // 60
+MAX_UPLOAD_MB = 50
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 JOBS = {}
 JOBS_LOCK = Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -532,9 +534,16 @@ zone.addEventListener('dragleave', e => { if (zone.contains(e.relatedTarget)) re
 zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('hover'); title.textContent = DSP_OK ? 'Drop your track here' : 'Run locally to master tracks'; const f = e.dataTransfer.files[0]; if (f && DSP_OK) upload(f); });
 file.addEventListener('change', e => { const f = e.target.files[0]; if (f && DSP_OK) upload(f); });
 
+const MAX_UPLOAD_MB = 50;
 async function upload(f) {
   if (!DSP_OK) return;
   const mb = (f.size / 1048576).toFixed(1);
+  if (f.size > MAX_UPLOAD_MB * 1024 * 1024) {
+    title.textContent = 'File too large';
+    hint.textContent = `${f.name} · ${mb} MB`;
+    statusEl.textContent = `Please upload a track ${MAX_UPLOAD_MB} MB or smaller.`;
+    return;
+  }
   title.textContent = 'Uploading…';
   hint.textContent = `${f.name} · ${mb} MB`;
   statusEl.textContent = 'Sending directly to the mastering engine…';
@@ -764,12 +773,40 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         traceback.print_exc()
         _set_job(job_id, status="failed", message="Render failed.", error=str(exc))
 
+def _cgroup_mem():
+    """Return (limit_mb, usage_mb) from the container cgroup, or (None, None)."""
+    def _read(path):
+        try:
+            with open(path) as fh:
+                return fh.read().strip()
+        except Exception:
+            return None
+    limit = usage = None
+    v2_max, v2_cur = _read("/sys/fs/cgroup/memory.max"), _read("/sys/fs/cgroup/memory.current")
+    if v2_max is not None:
+        if v2_max.isdigit():
+            limit = int(v2_max)
+        if v2_cur and v2_cur.isdigit():
+            usage = int(v2_cur)
+    else:
+        v1_lim, v1_use = _read("/sys/fs/cgroup/memory/memory.limit_in_bytes"), _read("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+        if v1_lim and v1_lim.isdigit():
+            limit = int(v1_lim)
+        if v1_use and v1_use.isdigit():
+            usage = int(v1_use)
+    to_mb = lambda b: round(b / 1048576) if isinstance(b, int) and b < (1 << 62) else None
+    return to_mb(limit), to_mb(usage)
+
+
 @app.get("/health")
 async def health():
+    lim, use = _cgroup_mem()
     return {
         "status": "ok",
         "dsp_available": DSP_AVAILABLE,
         "platform": "vercel" if _ON_VERCEL else "server",
+        "mem_limit_mb": lim,
+        "mem_usage_mb": use,
     }
 
 
@@ -789,8 +826,17 @@ async def convert(file: UploadFile = File(...), preset: str = Form("reference_lu
     job_id = uuid.uuid4().hex[:12]
     src = APP_DIR / f"{safe_stem}_{job_id}{suffix}"
     out = APP_DIR / f"{safe_stem}_{job_id}_8D_Final.wav"
+    total = 0
     with src.open("wb") as f:
         while chunk := await file.read(1024 * 1024):
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                f.close()
+                src.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File is too large. Please upload tracks {MAX_UPLOAD_MB} MB or smaller.",
+                )
             f.write(chunk)
     _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name, mix_prompt=mix_prompt, stem_mode=stem_mode)
     EXECUTOR.submit(_process_job, job_id, src, out, preset, mix_prompt, stem_mode)
