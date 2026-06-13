@@ -422,7 +422,8 @@ HTML = """
             <div class="field">
               <label for="preset">Flight profile</label>
               <select id="preset">
-                <option value="clean_reference" selected>Clean Reference — polished 7.7s orbit</option>
+                <option value="binaural_8d" selected>8D Binaural Mix — wide 10.4s orbit, bass-safe & felt</option>
+                <option value="clean_reference">Clean Reference — polished 7.7s orbit</option>
                 <option value="reference_luxe">Reference Luxe — 10.4s orbit</option>
                 <option value="phi_reference_orbit">Golden Ratio Reference — φ-timed orbit</option>
                 <option value="fibonacci_spiral">Fibonacci Spiral — golden-angle path</option>
@@ -645,7 +646,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             )
         bpm = estimate_bpm(audio)
         safe_preset = preset if preset in panning_preset_names() else "reference_luxe"
-        reference_speed_presets = {"reference_luxe", "phi_reference_orbit", "fibonacci_spiral", "golden_figure8", "lucas_breath"}
+        reference_speed_presets = {"binaural_8d", "reference_luxe", "phi_reference_orbit", "fibonacci_spiral", "golden_figure8", "lucas_breath"}
         clean_speed_presets = {"clean_reference"}
         if safe_preset in clean_speed_presets:
             rotation_cpm = 7.76
@@ -657,6 +658,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             # Mix-engineer feedback profile: keep lead/body front-center, move air,
             # guitar brightness, ambience, and generated room instead of spinning
             # the whole vocal image.
+            "binaural_8d": dict(room_size=0.22, motion_depth=0.86, high_emphasis=0.62, spatial_mix=0.70, center_focus=0.66, felt_presence=0.80),
             "clean_reference": dict(room_size=0.14, motion_depth=0.58, high_emphasis=0.42, spatial_mix=0.52, center_focus=0.84, felt_presence=0.42, denoise_amount=0.84),
             "reference_luxe": dict(room_size=0.20, motion_depth=0.74, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.72, felt_presence=0.72),
             "phi_reference_orbit": dict(room_size=0.20, motion_depth=0.72, high_emphasis=0.70, spatial_mix=0.64, center_focus=0.74, felt_presence=0.74),

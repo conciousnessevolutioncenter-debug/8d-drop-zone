@@ -640,6 +640,7 @@ def _simple_room_reverb(stereo: np.ndarray, sample_rate: int, amount: float) -> 
 
 
 PANNING_PRESETS = {
+    "binaural_8d": "8D Binaural Mix: models the popular Owl City 'Fireflies (8D)' fingerprint — smooth ~10.4s wide orbit, but bass-centered and HRTF-cued so it stays mono-kinder.",
     "clean_reference": "Cleaner YouTube-reference mix: faster 7.7-second orbit, tighter width, stronger center, darker air, and punch-safe bass.",
     "reference_luxe": "Measured YouTube-reference orbit: 10.4-second sweep, wide mids/highs, protected mono bass.",
     "phi_reference_orbit": "Golden Ratio version of the measured reference: phi-weighted timing, drift, and rear shading.",
@@ -738,7 +739,16 @@ def _azimuth_series(
     base = t * np.float32(cycles_per_second) * np.float32(360.0)
     preset = panning_preset if panning_preset in PANNING_PRESETS else "fireflies_plus"
 
-    if preset == "clean_reference":
+    if preset == "binaural_8d":
+        # 8D Binaural Mix: reproduces the measured Owl City "Fireflies (8D)"
+        # fingerprint — a smooth, wide ~10.4 s (5.8 cpm) orbit with a gentle
+        # secondary lobe so the swing never feels mechanical. Run at a fixed
+        # 5.8 cpm; the engine's bass split + ITD/ILD cues keep it externalised
+        # and far more mono-compatible than the source reference.
+        az = base + 9.0 * np.sin(2 * np.pi * cycles_per_second * 0.33 * t) + 4.0 * np.sin(
+            2 * np.pi * cycles_per_second * 1.2 * t
+        )
+    elif preset == "clean_reference":
         # Based on the cleaner second YouTube reference: ~0.129 Hz / 7.73 s
         # orbit, tighter side/mid energy, more centered image, and less hyped
         # air than the wider Reference Luxe profile.
