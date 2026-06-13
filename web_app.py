@@ -353,6 +353,16 @@ HTML = """
     .profile .idx{ font-family:var(--mono); font-size:12px; color:var(--cyan); padding-top:2px; min-width:22px; }
     .profile b{ display:block; font-family:var(--display); font-weight:600; font-size:14px; letter-spacing:-.01em; margin-bottom:4px; }
     .profile small{ color:var(--soft); font-size:11.5px; line-height:1.4; }
+    .profile{ cursor:pointer; }
+    .profile:focus-visible{ outline:1px solid var(--cyan); outline-offset:2px; }
+    .profile[aria-pressed="true"]{ border-color:var(--cyan); box-shadow:0 0 24px rgba(80,180,255,.20); background:linear-gradient(180deg, rgba(18,30,54,.66), rgba(9,14,28,.42)); }
+    .profile[aria-pressed="true"] .idx{ color:var(--cyan); }
+    .profile-detail{ margin-top:14px; border:1px solid var(--hair); border-radius:16px; padding:18px 20px; background:linear-gradient(180deg, rgba(13,20,38,.6), rgba(7,11,22,.4)); }
+    .profile-detail h3{ font-family:var(--display); font-weight:600; font-size:16px; margin:0; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; }
+    .profile-detail .pd-idx{ font-family:var(--mono); font-size:12px; color:var(--cyan); }
+    .profile-detail .pd-tag{ font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--soft); border:1px solid var(--hair); border-radius:999px; padding:3px 10px; margin-left:auto; }
+    .profile-detail p{ color:var(--soft); font-size:13px; line-height:1.65; margin:10px 0 0; }
+    .profile-detail .pd-best{ color:var(--ink); }
 
     .foot{ display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:64px; padding-top:20px; border-top:1px solid var(--hair); }
     .foot .word{ font-family:var(--display); letter-spacing:.22em; font-size:13px; }
@@ -473,20 +483,25 @@ HTML = """
       <div><span class="tlabel">Export</span><strong>32-bit WAV</strong><span>Float export keeps detail, avoids brittle renders.</span></div>
     </section>
 
-    <div class="section-head"><h2>Eleven mastering orbits</h2><span class="tlabel">Flight profiles</span></div>
+    <div class="section-head"><h2>Fifteen mastering orbits</h2><span class="tlabel">Flight profiles · tap to select</span></div>
     <section class="profiles" aria-label="Flight profiles">
-      <div class="profile"><span class="idx">01</span><div><b>Clean Reference</b><small>Polished 7.7s orbit — tight and centered.</small></div></div>
-      <div class="profile"><span class="idx">02</span><div><b>Reference Luxe</b><small>Expansive 10.4s premium orbit.</small></div></div>
-      <div class="profile"><span class="idx">03</span><div><b>Golden Ratio Reference</b><small>φ-timed orbit for organic motion.</small></div></div>
-      <div class="profile"><span class="idx">04</span><div><b>Fibonacci Spiral</b><small>Golden-angle spiral path.</small></div></div>
-      <div class="profile"><span class="idx">05</span><div><b>Golden Figure 8</b><small>φ front/back sweep.</small></div></div>
-      <div class="profile"><span class="idx">06</span><div><b>Lucas Breath</b><small>Slow Fibonacci halo motion.</small></div></div>
-      <div class="profile"><span class="idx">07</span><div><b>Fireflies Plus</b><small>Smooth premium orbit shimmer.</small></div></div>
-      <div class="profile"><span class="idx">08</span><div><b>Cinematic Halo</b><small>Elegant atmospheric surround.</small></div></div>
-      <div class="profile"><span class="idx">09</span><div><b>Figure 8</b><small>Front/back immersive sweep.</small></div></div>
-      <div class="profile"><span class="idx">10</span><div><b>Wide Orbit</b><small>Powerful chorus-width motion.</small></div></div>
-      <div class="profile"><span class="idx">11</span><div><b>Vocal Safe</b><small>Clear center, gentle motion.</small></div></div>
+      <div class="profile" data-preset="binaural_8d" role="button" tabindex="0" aria-pressed="false"><span class="idx">01</span><div><b>8D Binaural Mix</b><small>Wide 10.4s orbit — bass-safe, felt.</small></div></div>
+      <div class="profile" data-preset="clean_reference" role="button" tabindex="0" aria-pressed="false"><span class="idx">02</span><div><b>Clean Reference</b><small>Polished 7.7s orbit — tight and centered.</small></div></div>
+      <div class="profile" data-preset="reference_luxe" role="button" tabindex="0" aria-pressed="false"><span class="idx">03</span><div><b>Reference Luxe</b><small>Expansive 10.4s premium orbit.</small></div></div>
+      <div class="profile" data-preset="phi_reference_orbit" role="button" tabindex="0" aria-pressed="false"><span class="idx">04</span><div><b>Golden Ratio Reference</b><small>φ-timed orbit for organic motion.</small></div></div>
+      <div class="profile" data-preset="fibonacci_spiral" role="button" tabindex="0" aria-pressed="false"><span class="idx">05</span><div><b>Fibonacci Spiral</b><small>Golden-angle spiral path.</small></div></div>
+      <div class="profile" data-preset="golden_figure8" role="button" tabindex="0" aria-pressed="false"><span class="idx">06</span><div><b>Golden Figure 8</b><small>φ front/back sweep.</small></div></div>
+      <div class="profile" data-preset="lucas_breath" role="button" tabindex="0" aria-pressed="false"><span class="idx">07</span><div><b>Lucas Breath</b><small>Slow Fibonacci halo motion.</small></div></div>
+      <div class="profile" data-preset="fibonacci_waltz" role="button" tabindex="0" aria-pressed="false"><span class="idx">08</span><div><b>The Fibonacci Waltz</b><small>Triple-meter golden sway.</small></div></div>
+      <div class="profile" data-preset="fibonacci_magic" role="button" tabindex="0" aria-pressed="false"><span class="idx">09</span><div><b>Fibonacci Magic</b><small>Shimmering node-hopping sparkle.</small></div></div>
+      <div class="profile" data-preset="opus_fibonacci" role="button" tabindex="0" aria-pressed="false"><span class="idx">10</span><div><b>Opus Fibonacci</b><small>Flagship grand orbit, deepest feel.</small></div></div>
+      <div class="profile" data-preset="fireflies_plus" role="button" tabindex="0" aria-pressed="false"><span class="idx">11</span><div><b>Fireflies Plus</b><small>Smooth premium orbit shimmer.</small></div></div>
+      <div class="profile" data-preset="cinematic_halo" role="button" tabindex="0" aria-pressed="false"><span class="idx">12</span><div><b>Cinematic Halo</b><small>Elegant atmospheric surround.</small></div></div>
+      <div class="profile" data-preset="figure8" role="button" tabindex="0" aria-pressed="false"><span class="idx">13</span><div><b>Figure 8</b><small>Front/back immersive sweep.</small></div></div>
+      <div class="profile" data-preset="wide_orbit" role="button" tabindex="0" aria-pressed="false"><span class="idx">14</span><div><b>Wide Orbit</b><small>Powerful chorus-width motion.</small></div></div>
+      <div class="profile" data-preset="vocal_safe" role="button" tabindex="0" aria-pressed="false"><span class="idx">15</span><div><b>Vocal Safe</b><small>Clear center, gentle motion.</small></div></div>
     </section>
+    <div class="profile-detail" id="profileDetail" aria-live="polite"></div>
 
     <footer class="foot">
       <span class="word">THE 8D ENGINE</span>
@@ -617,6 +632,43 @@ async function pollJob(jobId) {
     await new Promise(r => setTimeout(r, 1500));
   }
 }
+
+/* Flight-profile cards act as a selector: tap one to choose it (syncs the
+   dropdown above) and reveal its full write-up below. */
+const PROFILES = {
+  binaural_8d:{tag:'Fixed · ~10.4 s', detail:`<p>The flagship, modeled on the classic Owl City "Fireflies (8D)" sound — but rebuilt the right way. A smooth, wide orbit circles the air and instruments around your head about once every 10.4 seconds, while the sub-bass and kick stay locked dead-center and the lead vocal is held up front. You get the full "moving around you" effect of viral 8D without the seasick low-end swing, and it folds down to mono far more gracefully than the tracks it imitates.</p><p class="pd-best"><b>Best for:</b> almost anything — the safest and most impressive all-rounder, and the default.</p>`},
+  clean_reference:{tag:'Fixed · 7.7 s', detail:`<p>The tightest, most restrained profile. A quicker 7.7-second orbit with a narrower image, a stronger center, darker air and punch-safe bass — present but subtle and broadcast-clean, with the lowest dizziness of the set.</p><p class="pd-best"><b>Best for:</b> vocal-forward pop, loudness/streaming-sensitive masters, and listeners new to 8D.</p>`},
+  reference_luxe:{tag:'Fixed · ~10.4 s', detail:`<p>The premium reference sweep: a broad 10.4-second orbit with wide mids and highs, gentle non-mechanical drift, and protected mono bass. Obvious and luxurious without tipping into novelty.</p><p class="pd-best"><b>Best for:</b> full-band productions and modern pop/EDM that want a rich, clearly-moving spatial master.</p>`},
+  phi_reference_orbit:{tag:'Fixed · φ-timed', detail:`<p>Reference Luxe translated through the golden ratio. The same ~10.4-second orbit, but its small timing and position offsets are divided by powers of φ so the motion never settles into an obvious loop — it stays organic and alive.</p><p class="pd-best"><b>Best for:</b> when you love the reference feel but want subtle, ever-shifting life over long listens.</p>`},
+  fibonacci_spiral:{tag:'Fixed · φ spiral', detail:`<p>A spiral whose segments last 1, 1, 2, 3, 5, 8, 13 parts of each orbit and aim toward golden-angle points around you — quick darting passes interleaved with long, elegant sweeps. Its golden-angle timing keeps the path from ever quite repeating.</p><p class="pd-best"><b>Best for:</b> evolving electronic, cinematic and ambient material that rewards non-repeating motion.</p>`},
+  golden_figure8:{tag:'Fixed · φ figure-8', detail:`<p>A front-to-back figure-eight with φ-spaced lobes: the left/right side passes stay smooth while the front and rear transitions breathe at golden-ratio rates. It adds depth (front-back) rather than just width.</p><p class="pd-best"><b>Best for:</b> tracks that need a sense of sound passing in front of and behind you.</p>`},
+  lucas_breath:{tag:'Fixed · Lucas timing', detail:`<p>A slow expansion-and-contraction driven by Lucas numbers (2, 1, 3, 4, 7, 11) — an elegant breathing halo and the gentlest motion in the φ family, with the lowest nausea risk.</p><p class="pd-best"><b>Best for:</b> ambient, downtempo, meditation, sleep and very long listening sessions.</p>`},
+  fibonacci_waltz:{tag:'Beat-synced · 3/4', detail:`<p>A triple-meter sway: golden-angle nodes grouped 3-2-1 so the image rocks "one-two-three" with a φ-rate lilt, beat-synced to your track and tuned for deep felt presence. Graceful, never dizzy.</p><p class="pd-best"><b>Best for:</b> waltz and triple-feel songs, or anything you want to physically sway to.</p>`},
+  fibonacci_magic:{tag:'Beat-synced · φ', detail:`<p>Sparkling and surprising — quick golden-angle node-hopping over a wide arc, with a fast φ/φ² shimmer layered on top so the highs twinkle and dart around your head. The brightest, airiest profile.</p><p class="pd-best"><b>Best for:</b> synth-pop, bright electronic, and dreamy "magical" material.</p>`},
+  opus_fibonacci:{tag:'Beat-synced · φ', detail:`<p>The grand flagship of the golden family: the widest, slowest, most theatrical orbit, with a φ-spaced front/back figure-eight overlay and the deepest felt presence and biggest room of the set — a cinematic sweep you feel in your chest.</p><p class="pd-best"><b>Best for:</b> drops, choruses, trailers and big emotional moments.</p>`},
+  fireflies_plus:{tag:'Beat-synced', detail:`<p>A reference-inspired smooth premium orbit with subtle organic drift and a light shimmer — the softer, sparklier cousin of Reference Luxe.</p><p class="pd-best"><b>Best for:</b> a pretty, easygoing general-purpose spin when you're not sure which to pick.</p>`},
+  cinematic_halo:{tag:'Beat-synced', detail:`<p>A slow, emotional circle with mild non-repeating drift — wide and atmospheric, and deliberately un-dizzy.</p><p class="pd-best"><b>Best for:</b> film and score, ballads, ambient, and anything that wants space and emotion over obvious movement.</p>`},
+  figure8:{tag:'Beat-synced', detail:`<p>The classic figure-eight: it alternates left/right side travel with stronger front-and-back sweeps for more three-dimensional immersion than a plain circle.</p><p class="pd-best"><b>Best for:</b> headphone showcases and immersive, dynamic listening.</p>`},
+  wide_orbit:{tag:'Beat-synced', detail:`<p>The biggest, most theatrical circular orbit, with the most chorus-width energy and the least center lock.</p><p class="pd-best"><b>Best for:</b> choruses, drops and big-room material where maximum width is the goal.</p>`},
+  vocal_safe:{tag:'Beat-synced', detail:`<p>The most restrained motion of all — it hovers around the front and side quadrants instead of swinging hard to the rear, keeping the strongest center clarity so lyrics stay locked front-and-center.</p><p class="pd-best"><b>Best for:</b> vocal-led songs, podcasts, acoustic, and anywhere intelligibility matters most.</p>`},
+};
+const profileCards = Array.from(document.querySelectorAll('.profile'));
+const profileDetail = document.getElementById('profileDetail');
+function showProfile(val){
+  const card = profileCards.find(c => c.dataset.preset === val) || profileCards[0];
+  profileCards.forEach(c => c.setAttribute('aria-pressed', String(c === card)));
+  const idx = card.querySelector('.idx').textContent;
+  const titleTxt = card.querySelector('b').textContent;
+  const info = PROFILES[card.dataset.preset] || {tag:'', detail:''};
+  profileDetail.innerHTML = '<h3><span class="pd-idx">' + idx + '</span>' + titleTxt + '<span class="pd-tag">' + info.tag + '</span></h3>' + info.detail;
+}
+profileCards.forEach(card => {
+  const choose = () => { preset.value = card.dataset.preset; showProfile(card.dataset.preset); };
+  card.addEventListener('click', choose);
+  card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); } });
+});
+preset.addEventListener('change', () => showProfile(preset.value));
+showProfile(preset.value);
 </script>
 </body>
 </html>
