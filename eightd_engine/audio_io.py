@@ -9,12 +9,76 @@ The DSP core never knows about file formats; it only receives/returns AudioData.
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import tempfile
+import uuid
 import wave
 
 import numpy as np
 
 from .dsp import AudioData, ensure_stereo_float, normalize_peak
+
+
+# Formats libsndfile reads with sample-accurate seeking — safe to stream-read
+# directly without transcoding. Everything else (mp3/m4a/aac/opus/video
+# containers, or anything soundfile can't open) is decoded to a float WAV first.
+_SEEKABLE_SF_FORMATS = {"WAV", "WAVEX", "W64", "FLAC", "AIFF", "OGG"}
+
+
+def _find_ffmpeg() -> str:
+    """Locate an ffmpeg binary: system PATH, then imageio-ffmpeg, then pydub."""
+    import shutil
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+    try:
+        from pydub.utils import which as _pdwhich  # type: ignore
+
+        found = _pdwhich("ffmpeg")
+        if found:
+            return found
+    except Exception:
+        pass
+    raise RuntimeError("ffmpeg is required to decode this format but was not found on the system.")
+
+
+def to_seekable_wav(src: str | Path, work_dir: str | Path) -> tuple[Path, bool]:
+    """Return a seekable float-WAV view of ``src`` for block-streaming input.
+
+    If ``src`` is already a soundfile-native, sample-accurately seekable file it
+    is returned as-is. Otherwise it is decoded to a temporary 32-bit float WAV
+    with ffmpeg (which streams, so this stays memory-bounded for huge files) at
+    the source's native sample rate and channel count — a lossless container for
+    whatever the decoder produces, so track quality is preserved exactly.
+
+    Returns ``(path, is_temp)``; delete ``path`` when ``is_temp`` is True.
+    """
+    src = Path(src)
+    try:
+        import soundfile as sf  # type: ignore
+
+        info = sf.info(str(src))
+        if info.format in _SEEKABLE_SF_FORMATS:
+            return src, False
+    except Exception:
+        pass
+
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    tmp = work / f"{src.stem}_{uuid.uuid4().hex[:8]}_decoded.wav"
+    ff = _find_ffmpeg()
+    subprocess.run(
+        [ff, "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-c:a", "pcm_f32le", str(tmp)],
+        check=True,
+    )
+    return tmp, True
 
 
 COMMON_AUDIO_INPUTS = {".wav", ".flac", ".ogg", ".aiff", ".aif", ".mp3", ".m4a", ".aac", ".wma", ".opus", ".alac"}

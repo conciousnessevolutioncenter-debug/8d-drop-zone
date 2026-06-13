@@ -23,15 +23,18 @@ if _ON_VERCEL:
     DSP_AVAILABLE = False
 else:
     try:
-        from eightd_engine.audio_io import export_audio, load_audio
+        from eightd_engine.audio_io import export_audio, load_audio, to_seekable_wav
         from eightd_engine.dsp import (
+            AudioData,
             analyze_correlation,
             bpm_to_premium_rotation_cpm,
             estimate_bpm,
             panning_preset_names,
             process_8d,
             render_8d_to_wav,
+            render_8d_file_to_wav,
         )
+        import soundfile as _sf
         from eightd_engine.stems import (
             StemData,
             StemSeparationUnavailable,
@@ -637,15 +640,26 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
     try:
         _log(f"start preset={preset} stem_mode={stem_mode}")
         _set_job(job_id, status="processing", message="Analyzing BPM…")
-        audio = load_audio(src)
-        duration_seconds = len(audio.samples) / float(audio.sample_rate or 1)
-        _log(f"loaded {duration_seconds:.1f}s audio, sr={audio.sample_rate}")
+        # Decode to a sample-accurate, seekable float WAV (lossless) so the render
+        # can stream the input block-by-block — the full song is never loaded into
+        # RAM, so track length is bounded only by disk, not memory.
+        src_wav, src_wav_is_temp = to_seekable_wav(src, APP_DIR)
+        _info = _sf.info(str(src_wav))
+        sr_in = int(_info.samplerate)
+        n_in = int(_info.frames)
+        duration_seconds = n_in / float(sr_in or 1)
+        _log(f"loaded {duration_seconds:.1f}s audio, sr={sr_in}")
         if duration_seconds > MAX_UPLOAD_SECONDS:
             raise ValueError(
                 f"Track is {duration_seconds / 60.0:.1f} minutes long. "
                 f"Please upload songs {MAX_UPLOAD_MINUTES} minutes or shorter."
             )
-        bpm = estimate_bpm(audio)
+        # BPM from a bounded leading window (tempo is ~constant; avoids loading the
+        # whole track just to beat-track it).
+        _bpm_window, _ = _sf.read(str(src_wav), frames=min(n_in, 150 * sr_in), dtype="float32", always_2d=True)
+        bpm = estimate_bpm(AudioData(samples=_bpm_window, sample_rate=sr_in))
+        del _bpm_window
+        audio = None  # the full in-memory decode is loaded lazily, only for AI stems
         safe_preset = preset if preset in panning_preset_names() else "reference_luxe"
         reference_speed_presets = {"binaural_8d", "reference_luxe", "phi_reference_orbit", "fibonacci_spiral", "golden_figure8", "lucas_breath"}
         clean_speed_presets = {"clean_reference"}
@@ -699,6 +713,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         stem_engine = "full_mix"
         stem_count = 0
         if requested_stem_mode == "ai_stems":
+            audio = load_audio(src)  # AI-stem path needs the full mix as a reference
             try:
                 mode_info = available_stem_mode()
                 if mode_info.get("mode") != "demucs":
@@ -741,9 +756,9 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             # Classic full-mix path streams the render straight to the WAV file
             # block-by-block, so peak RAM does not grow with the output length
             # (long tracks no longer need the whole rendered song held in memory).
-            _log("calling render_8d_to_wav (classic, streaming)")
-            report = render_8d_to_wav(
-                audio,
+            _log("calling render_8d_file_to_wav (classic, input+output streamed)")
+            report = render_8d_file_to_wav(
+                src_wav,
                 out,
                 rotation_cpm=rotation_cpm,
                 room_size=settings["room_size"],
@@ -786,6 +801,13 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         _log(f"FAILED: {exc}")
         traceback.print_exc()
         _set_job(job_id, status="failed", message="Render failed.", error=str(exc))
+    finally:
+        try:
+            _lv = locals()
+            if _lv.get("src_wav_is_temp") and _lv.get("src_wav") is not None:
+                Path(_lv["src_wav"]).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 def _cgroup_mem():
     """Return (limit_mb, usage_mb) from the container cgroup, or (None, None)."""

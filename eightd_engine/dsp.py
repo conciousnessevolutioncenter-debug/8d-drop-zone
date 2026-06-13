@@ -1205,47 +1205,31 @@ def process_8d(
     return AudioData(samples=out, sample_rate=sr)
 
 
-def render_8d_to_wav(
-    audio: AudioData,
-    out_path,
-    on_progress=None,
-    **params,
-) -> "CorrelationReport":
-    """Render an 8D track straight to a float WAV file, block by block.
+def _stream_render_to_wav(read_segment, n, sr, ref_rms, out_path, on_progress, youtube_master, preserve_quality, params):
+    """Core block-streaming renderer shared by the in-memory and file inputs.
 
-    This is the memory-bounded path for *long* tracks. Unlike :func:`process_8d`
-    it never holds the full-length rendered output in RAM — each block is written
-    to disk as it is produced — so peak memory no longer grows with the output
-    length (only the input array and one block's working set are resident).
+    ``read_segment(lo, hi)`` returns the input samples for the half-open frame
+    range ``[lo, hi)`` (any channel count; sanitised per block downstream). The
+    render is written to ``out_path`` block-by-block, so peak memory holds only
+    one block's working set — never the whole input or output.
 
-    The final master is a single global gain, so it needs whole-file peak/RMS.
-    We therefore use two streaming passes: pass 1 renders blocks to a temp WAV
-    while accumulating peak/RMS and stereo-correlation stats; pass 2 streams that
-    temp file back, applies the one master gain, and writes the final WAV. Output
-    is bit-identical to ``export_audio(process_8d(...))`` for the same params.
-
-    Returns the :class:`CorrelationReport` (computed during pass 1) so the caller
-    does not need a separate full-length :func:`analyze_correlation` pass.
+    Two streaming passes give an exact global master: pass 1 renders to a temp
+    WAV while accumulating global peak/RMS + correlation stats; pass 2 applies
+    the single master gain. Output is bit-identical to
+    ``export_audio(process_8d(...))``. Returns the :class:`CorrelationReport`.
     """
     import soundfile as sf
     from pathlib import Path
 
     out_path = Path(out_path)
-    youtube_master = bool(params.get("youtube_master", False))
-    preserve_quality = bool(params.get("preserve_quality", False))
-
-    samples = ensure_stereo_float(audio.samples)
-    sr = int(audio.sample_rate)
-    n = len(samples)
     block = _BLOCK_SECONDS * sr
     pad = int(_BLOCK_PAD_SECONDS * sr)
-    ref_rms = _rms_chunked(samples)
 
     peak = 0.0
-    sumsq = 0.0           # for global RMS
+    sumsq = 0.0
     count = 0
-    s_ll = s_rr = s_lr = s_l = s_r = 0.0   # stereo correlation accumulators
-    s_mm = s_ss = 0.0                       # mid / side energy
+    s_ll = s_rr = s_lr = s_l = s_r = 0.0
+    s_mm = s_ss = 0.0
 
     tmp_path = out_path.parent / (out_path.stem + ".rawtmp.wav")
     with sf.SoundFile(str(tmp_path), mode="w", samplerate=sr, channels=2, subtype="FLOAT") as raw:
@@ -1254,7 +1238,7 @@ def render_8d_to_wav(
             end = min(pos + block, n)
             lo = max(0, pos - pad)
             hi = min(n, end + pad)
-            segment = AudioData(samples=np.ascontiguousarray(samples[lo:hi]), sample_rate=sr)
+            segment = AudioData(samples=np.ascontiguousarray(read_segment(lo, hi)), sample_rate=sr)
             rendered = _process_8d_core(
                 segment, _start_frame=lo, _total_frames=n, _do_final_normalize=False, **params
             ).samples
@@ -1277,8 +1261,6 @@ def render_8d_to_wav(
             del segment, rendered, kept, k, L, R, mid, side
             pos = end
 
-    del samples  # free the full-length source before pass 2
-
     out_rms = float(np.sqrt(sumsq / max(1, count) + 1e-18))
     gain = _master_gain(peak, out_rms, ref_rms, youtube_master, preserve_quality)
     # Mirror export_audio's normalize_peak(0.98): a no-op once the master gain
@@ -1295,7 +1277,6 @@ def render_8d_to_wav(
             final.write(blk * g32 if gain != 1.0 else blk)
     tmp_path.unlink(missing_ok=True)
 
-    # Correlation report from streamed accumulators (matches analyze_correlation).
     nf = max(1, count // 2)
     var_l = s_ll / nf - (s_l / nf) ** 2
     var_r = s_rr / nf - (s_r / nf) ** 2
@@ -1314,3 +1295,60 @@ def render_8d_to_wav(
         side_mid_ratio=ratio,
         phase_warning=bool(corr < -0.15 or ratio > 1.35),
     )
+
+
+def render_8d_to_wav(audio: AudioData, out_path, on_progress=None, **params) -> "CorrelationReport":
+    """Render an in-memory track to a float WAV, streaming blocks to disk.
+
+    Memory-bounded on the *output* side (the finished song is never assembled in
+    RAM). The input array is still resident; for unbounded length use
+    :func:`render_8d_file_to_wav`, which streams the input from disk too.
+    """
+    samples = ensure_stereo_float(audio.samples)
+    sr = int(audio.sample_rate)
+    ref_rms = _rms_chunked(samples)
+    return _stream_render_to_wav(
+        lambda lo, hi: samples[lo:hi],
+        len(samples), sr, ref_rms, out_path, on_progress,
+        bool(params.get("youtube_master", False)), bool(params.get("preserve_quality", False)), params,
+    )
+
+
+def render_8d_file_to_wav(in_path, out_path, on_progress=None, **params) -> "CorrelationReport":
+    """Render an 8D track reading the input from a seekable WAV on disk.
+
+    Both input and output are streamed block-by-block, so peak memory holds only
+    one block's working set regardless of track length — a 3-minute song and a
+    3-hour set use the same RAM. ``in_path`` must be a soundfile-readable,
+    sample-accurately-seekable file (WAV/FLAC/AIFF/OGG); transcode lossy/compressed
+    or container formats to a float WAV first (see audio_io.to_seekable_wav) so no
+    quality is lost and block boundaries stay sample-exact.
+    """
+    import soundfile as sf
+
+    info = sf.info(str(in_path))
+    sr = int(info.samplerate)
+    n = int(info.frames)
+
+    # Reference loudness: one streamed pass over the input (bounded memory).
+    sumsq = 0.0
+    cnt = 0
+    for blk in sf.blocks(str(in_path), blocksize=1 << 20, dtype="float32", always_2d=True):
+        b = blk.astype(np.float64)
+        sumsq += float(np.sum(b * b)); cnt += b.size
+        del b
+    ref_rms = float(np.sqrt(sumsq / max(1, cnt) + 1e-18))
+
+    snd = sf.SoundFile(str(in_path))
+
+    def read_segment(lo, hi):
+        snd.seek(lo)
+        return snd.read(hi - lo, dtype="float32", always_2d=True)
+
+    try:
+        return _stream_render_to_wav(
+            read_segment, n, sr, ref_rms, out_path, on_progress,
+            bool(params.get("youtube_master", False)), bool(params.get("preserve_quality", False)), params,
+        )
+    finally:
+        snd.close()
