@@ -726,6 +726,59 @@ def _set_job(job_id: str, **updates):
         job.update(updates)
         job["updated_at"] = time.time()
 
+def _separate_stems_replicate(src: Path, work_dir: Path):
+    """Separate stems with Demucs hosted on Replicate (no local torch/RAM).
+
+    Sends the track to Replicate, downloads the returned stems into ``work_dir``
+    (so the existing zip step packages them), and returns ``{name: StemData}``.
+    Raises :class:`StemSeparationUnavailable` if the token is missing or the call
+    fails, so the caller falls back to the classic render cleanly.
+
+    Privacy note: this uploads the user's audio to Replicate, a third party.
+    """
+    import urllib.request
+
+    if not os.environ.get("REPLICATE_API_TOKEN"):
+        raise StemSeparationUnavailable("REPLICATE_API_TOKEN is not set")
+    try:
+        import replicate
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise StemSeparationUnavailable(f"replicate client not installed: {exc}")
+
+    model_ref = os.environ.get("REPLICATE_DEMUCS_MODEL", "ryan5453/demucs")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(src, "rb") as fh:
+            output = replicate.run(model_ref, input={"audio": fh, "output_format": "wav"})
+    except Exception as exc:
+        raise StemSeparationUnavailable(f"Replicate separation failed: {exc}")
+
+    if isinstance(output, dict):
+        items = output
+    elif isinstance(output, (list, tuple)):
+        names = ["vocals", "drums", "bass", "other"]
+        items = {(names[i] if i < len(names) else f"stem{i}"): v for i, v in enumerate(output)}
+    else:
+        raise StemSeparationUnavailable(f"Unexpected Replicate output type: {type(output).__name__}")
+
+    stems: dict = {}
+    for name, val in items.items():
+        if val is None:
+            continue
+        dest = work_dir / f"{name}.wav"
+        try:
+            data = val.read()  # replicate>=0.25 FileOutput
+        except AttributeError:
+            with urllib.request.urlopen(str(val), timeout=300) as resp:
+                data = resp.read()
+        dest.write_bytes(data)
+        loaded = load_audio(dest)
+        stems[name] = StemData(loaded.samples, loaded.sample_rate)
+    if not stems:
+        raise StemSeparationUnavailable("Replicate returned no stems")
+    return stems
+
+
 def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = "", stem_mode: str = "classic"):
     import time as _time
     _t0 = _time.time()
@@ -810,12 +863,21 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         if requested_stem_mode == "ai_stems":
             audio = load_audio(src)  # AI-stem path needs the full mix as a reference
             try:
-                mode_info = available_stem_mode()
-                if mode_info.get("mode") != "demucs":
-                    raise StemSeparationUnavailable(mode_info.get("message", "AI stem separation is unavailable"))
-                _set_job(job_id, message="Separating vocals, drums, bass, and instruments with AI stems…", stem_mode=requested_stem_mode)
                 stem_dir = APP_DIR / f"{job_id}_stems"
-                stems = separate_stems_from_file(src, work_dir=stem_dir)
+                # Prefer hosted separation (Replicate) when configured — no local
+                # torch/RAM needed. Otherwise use a local Demucs install. Either
+                # way, fall back to the classic render if neither is available.
+                if os.environ.get("REPLICATE_API_TOKEN"):
+                    _set_job(job_id, message="Separating stems with hosted AI (Replicate)…", stem_mode=requested_stem_mode)
+                    stems = _separate_stems_replicate(src, stem_dir)
+                    stem_engine = "replicate_demucs"
+                else:
+                    mode_info = available_stem_mode()
+                    if mode_info.get("mode") != "demucs":
+                        raise StemSeparationUnavailable(mode_info.get("message", "AI stem separation is unavailable"))
+                    _set_job(job_id, message="Separating vocals, drums, bass, and instruments with AI stems…", stem_mode=requested_stem_mode)
+                    stems = separate_stems_from_file(src, work_dir=stem_dir)
+                    stem_engine = "demucs"
                 stem_count = len(stems)
                 # Zip the separated stem WAVs for download (vocals/drums/bass/other).
                 import zipfile as _zip
@@ -832,7 +894,6 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                     rotation_cpm=rotation_cpm,
                     panning_preset=safe_preset,
                 )
-                stem_engine = "demucs"
             except StemSeparationUnavailable as exc:
                 stem_engine = "hybrid_fallback"
                 fallback_note = f"AI stems unavailable; used classic protected full-mix render ({exc})."

@@ -9,3 +9,7 @@ numpy>=1.24
 scipy>=1.10
 soundfile>=0.12
 pydub>=0.25
+# Optional: hosted AI stem separation (Demucs on Replicate). Tiny API client,
+# no torch. Activates only when REPLICATE_API_TOKEN is set; otherwise the app
+# falls back to the classic full-mix render.
+replicate>=0.25
