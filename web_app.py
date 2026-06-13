@@ -274,6 +274,13 @@ HTML = """
     .badges{ margin-top:24px; display:flex; flex-wrap:wrap; gap:9px; }
     .badge{ font-family:var(--mono); border:1px solid var(--hair); background:rgba(255,255,255,.025); color:var(--muted); border-radius:999px; padding:8px 12px; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; transition:border-color .2s, color .2s, box-shadow .2s; }
     .badge:hover{ border-color:var(--hair2); color:var(--ink); box-shadow:0 0 18px rgba(98,224,255,.12); }
+    .badge{ cursor:pointer; }
+    .badge:focus-visible{ outline:1px solid var(--cyan); outline-offset:2px; }
+    .badge[aria-pressed="true"]{ border-color:var(--cyan); color:var(--ink); box-shadow:0 0 18px rgba(98,224,255,.18); background:rgba(98,224,255,.06); }
+    .feat-detail{ margin-top:14px; max-width:620px; min-height:0; }
+    .feat-detail.show{ border:1px solid var(--hair); border-radius:14px; padding:13px 16px; background:linear-gradient(180deg, rgba(13,20,38,.55), rgba(7,11,22,.35)); }
+    .feat-detail b{ font-family:var(--display); color:var(--ink); font-weight:500; font-size:13px; }
+    .feat-detail p{ color:var(--soft); font-size:12.5px; line-height:1.6; margin:6px 0 0; }
 
     #zone{ position:relative; overflow:hidden; min-height:640px; border:1px solid var(--hair2); border-radius:28px;
       background:linear-gradient(180deg, rgba(14,20,38,.72), rgba(7,11,22,.6)); backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
@@ -410,13 +417,14 @@ HTML = """
           <div><span class="tlabel">Stereo field</span><strong>0.60</strong><span>Median side/mid width target.</span></div>
         </div>
         <div class="badges" aria-label="Onboard systems">
-          <span class="badge">BPM aware</span>
-          <span class="badge">Static cleanup</span>
-          <span class="badge">Golden ratio motion</span>
-          <span class="badge">Fibonacci timing</span>
-          <span class="badge">Felt-presence panning</span>
-          <span class="badge">AI stem separation</span>
+          <span class="badge" data-feat="bpm_aware" role="button" tabindex="0" aria-pressed="false">BPM aware</span>
+          <span class="badge" data-feat="static_cleanup" role="button" tabindex="0" aria-pressed="false">Static cleanup</span>
+          <span class="badge" data-feat="golden_ratio" role="button" tabindex="0" aria-pressed="false">Golden ratio motion</span>
+          <span class="badge" data-feat="fibonacci_timing" role="button" tabindex="0" aria-pressed="false">Fibonacci timing</span>
+          <span class="badge" data-feat="felt_presence" role="button" tabindex="0" aria-pressed="false">Felt-presence panning</span>
+          <span class="badge" data-feat="ai_stems" role="button" tabindex="0" aria-pressed="false">AI stem separation</span>
         </div>
+        <div class="feat-detail" id="featDetail" aria-live="polite"></div>
       </div>
       <div id="zone">
         <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
@@ -629,7 +637,12 @@ async function pollJob(jobId) {
       title.textContent = 'Spatial master ready';
       // Download URL is relative to Railway — prepend API base for a direct link.
       const dlUrl = job.download_url.startsWith('http') ? job.download_url : `${API}${job.download_url}`;
-      hint.innerHTML = `<a href="${dlUrl}" download>⬇ Download ${job.output_name}</a>`;
+      let links = `<a href="${dlUrl}" download>⬇ Download ${job.output_name}</a>`;
+      if (job.stems_url) {
+        const stemsUrl = job.stems_url.startsWith('http') ? job.stems_url : `${API}${job.stems_url}`;
+        links += `<br><a href="${stemsUrl}" download>⬇ Download stems (${job.stem_count} files, .zip)</a>`;
+      }
+      hint.innerHTML = links;
       statusEl.textContent = `Profile: ${job.preset}\\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\\nPrompt: ${job.mix_notes || 'Selected profile only'}\\nBPM: ${job.bpm}\\nOrbit: ${job.rotation_cpm} cycles/min\\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
       return;
     }
@@ -675,6 +688,29 @@ profileCards.forEach(card => {
 });
 preset.addEventListener('change', () => showProfile(preset.value));
 showProfile(preset.value);
+
+/* Onboard-systems badges: tap one to read what that feature does. */
+const FEATURES = {
+  bpm_aware:{title:'BPM aware', body:`The engine beat-tracks your song and ties the orbit speed to its tempo, so the motion lands with the groove instead of drifting against it. Fixed-speed profiles (like 8D Binaural Mix and the reference orbits) intentionally override this with a set rate.`},
+  static_cleanup:{title:'Static cleanup', body:`A gentle, loudness-matched denoise lifts hiss and background static off the track before spatializing — it removes noise without dulling the music or changing its overall level.`},
+  golden_ratio:{title:'Golden ratio motion', body:`Several profiles place their movement at golden-angle (φ ≈ 137.5°) points around you and time the passes with φ-derived ratios, so the orbit feels organic and never settles into an obvious machine loop.`},
+  fibonacci_timing:{title:'Fibonacci timing', body:`Orbit segments last 1, 1, 2, 3, 5, 8, 13 parts of a cycle (or Lucas 2, 1, 3, 4, 7, 11), giving quick darting passes interleaved with long, elegant sweeps that don't repeat predictably.`},
+  felt_presence:{title:'Felt-presence panning', body:`Low-mid body is selectively re-anchored and lightly reinforced so the spatial movement is something you feel in the chest, not just hear — while the sub-bass and kick stay locked in the center.`},
+  ai_stems:{title:'AI stem separation', body:`Optionally splits the track into vocals, drums, bass and other (via Demucs), spatializes each with role-aware settings — bass stays mono-centered, vocals anchored front, instruments and air get more motion — then recombines them, and lets you download the separated stems as a zip. Requires Demucs on the server; otherwise the app uses the classic full-mix render.`},
+};
+const featDetail = document.getElementById('featDetail');
+const badges = Array.from(document.querySelectorAll('.badge[data-feat]'));
+function showFeature(key){
+  const info = FEATURES[key]; if(!info) return;
+  badges.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.feat === key)));
+  featDetail.className = 'feat-detail show';
+  featDetail.innerHTML = '<b>' + info.title + '</b><p>' + info.body + '</p>';
+}
+badges.forEach(b => {
+  const open = () => showFeature(b.dataset.feat);
+  b.addEventListener('click', open);
+  b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+});
 </script>
 </body>
 </html>
@@ -770,6 +806,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
         requested_stem_mode = stem_mode if stem_mode in {"classic", "ai_stems"} else "classic"
         stem_engine = "full_mix"
         stem_count = 0
+        stems_url = None
         if requested_stem_mode == "ai_stems":
             audio = load_audio(src)  # AI-stem path needs the full mix as a reference
             try:
@@ -777,8 +814,17 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                 if mode_info.get("mode") != "demucs":
                     raise StemSeparationUnavailable(mode_info.get("message", "AI stem separation is unavailable"))
                 _set_job(job_id, message="Separating vocals, drums, bass, and instruments with AI stems…", stem_mode=requested_stem_mode)
-                stems = separate_stems_from_file(src, work_dir=APP_DIR / f"{job_id}_stems")
+                stem_dir = APP_DIR / f"{job_id}_stems"
+                stems = separate_stems_from_file(src, work_dir=stem_dir)
                 stem_count = len(stems)
+                # Zip the separated stem WAVs for download (vocals/drums/bass/other).
+                import zipfile as _zip
+                zip_path = APP_DIR / f"{out.stem}_stems.zip"
+                with _zip.ZipFile(zip_path, "w", _zip.ZIP_STORED) as zf:
+                    for wav in sorted(stem_dir.rglob("*.wav")):
+                        zf.write(wav, arcname=wav.name)
+                stems_url = f"/files/{zip_path.name}"
+                _log(f"zipped {stem_count} stems -> {zip_path.name}")
                 _set_job(job_id, message=f"Rendering {stem_count} separated stems with role-aware spatial processing…")
                 rendered = process_stem_spatial_mix(
                     stems,
@@ -852,6 +898,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             stem_mode=requested_stem_mode,
             stem_engine=stem_engine,
             stem_count=stem_count,
+            stems_url=stems_url,
         )
         _log("job complete")
     except Exception as exc:
