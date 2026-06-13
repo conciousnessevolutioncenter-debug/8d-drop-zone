@@ -57,11 +57,17 @@ PHI = (1.0 + math.sqrt(5.0)) / 2.0
 GOLDEN_ANGLE_DEGREES = 360.0 / (PHI * PHI)  # ~137.507°, golden-angle spatial stepping
 FIBONACCI_WEIGHTS = np.array([1, 1, 2, 3, 5, 8, 13], dtype=np.float64)
 LUCAS_WEIGHTS = np.array([2, 1, 3, 4, 7, 11], dtype=np.float64)
+# Triple-meter golden timing for the "waltz" feel: nodes grouped 3-2-1 so the
+# image sways with a "1-2-3" lilt instead of an even sweep.
+WALTZ_WEIGHTS = np.array([3, 2, 1, 3, 2, 1, 3, 2, 1], dtype=np.float64)
 FIBONACCI_PRESETS = {
     "phi_reference_orbit",
     "fibonacci_spiral",
     "golden_figure8",
     "lucas_breath",
+    "fibonacci_waltz",
+    "fibonacci_magic",
+    "opus_fibonacci",
 }
 
 
@@ -640,6 +646,9 @@ PANNING_PRESETS = {
     "fibonacci_spiral": "Fibonacci-timed spiral that visits golden-angle spatial nodes around the listener.",
     "golden_figure8": "Figure-eight motion whose lobes and transitions are shaped by phi ratios.",
     "lucas_breath": "Slow Lucas/Fibonacci breathing orbit: elegant expansion-contraction with low nausea risk.",
+    "fibonacci_waltz": "The Fibonacci Waltz: triple-meter golden sway that rocks the image 1-2-3 around you, deep felt bass.",
+    "fibonacci_magic": "Fibonacci Magic: shimmering golden-angle node-hopping with twinkling highs that dart around the head.",
+    "opus_fibonacci": "Opus Fibonacci: the flagship — widest, deepest, most theatrical golden orbit you feel in the body.",
     "fireflies_plus": "Reference-inspired smooth premium orbit with subtle organic drift.",
     "cinematic_halo": "Slow halo movement: wide, emotional, atmospheric, non-dizzy.",
     "figure8": "Figure-eight style front/back emphasis with changing side energy.",
@@ -759,6 +768,30 @@ def _azimuth_series(
         lucas_offset = _golden_segment_orbit(orbit_phase, LUCAS_WEIGHTS, radius_degrees=28.0, start_degrees=GOLDEN_ANGLE_DEGREES / PHI)
         breath = 1.0 + 0.18 * np.sin(2 * np.pi * orbit_phase / PHI)
         az = base * 0.78 * breath + lucas_offset
+    elif preset == "fibonacci_waltz":
+        # The Fibonacci Waltz: golden-angle nodes grouped in 3-2-1 (triple meter)
+        # so the image sways "1-2-3" with a graceful lilt, plus a slow phi-rate
+        # sway. Beat-synced rotation (the drop drives the swing, like the source
+        # method) makes the 3/4 rock land on the groove. Wide but never dizzy.
+        fib_offset = _golden_segment_orbit(orbit_phase, WALTZ_WEIGHTS, radius_degrees=34.0, start_degrees=GOLDEN_ANGLE_DEGREES)
+        sway = (24.0 / PHI) * np.sin(2 * np.pi * cycles_per_second * t / PHI)
+        az = base * 0.90 + fib_offset + sway
+    elif preset == "fibonacci_magic":
+        # Fibonacci Magic: quick golden-angle node-hopping over a wide radius so
+        # the image darts to enchanting positions, layered with a fast phi/phi^2
+        # "shimmer" so the air twinkles around the head. Sparkly and surprising.
+        fib_offset = _golden_segment_orbit(orbit_phase, FIBONACCI_WEIGHTS, radius_degrees=54.0, start_degrees=GOLDEN_ANGLE_DEGREES / PHI)
+        shimmer = 9.0 * np.sin(2 * np.pi * cycles_per_second * PHI * t) + (13.0 / PHI) * np.sin(
+            2 * np.pi * cycles_per_second * PHI * PHI * t
+        )
+        az = base * 1.06 + fib_offset + shimmer
+    elif preset == "opus_fibonacci":
+        # Opus Fibonacci: the flagship. Widest, slowest, most theatrical golden
+        # orbit with a phi-spaced figure-eight front/back overlay, for a grand
+        # cinematic sweep you feel in the chest. Big radius, deliberate pace.
+        fib_offset = _golden_segment_orbit(orbit_phase, FIBONACCI_WEIGHTS, radius_degrees=72.0, start_degrees=0.0)
+        fig8 = (96.0 / PHI) * np.sin(4 * np.pi * orbit_phase + np.pi / PHI)
+        az = base * 0.84 + fib_offset + fig8
     elif preset == "reference_luxe":
         # Based on the supplied reference: ~0.096 Hz / 10.4 s orbit,
         # with broad left-right travel plus gentle non-mechanical drift.

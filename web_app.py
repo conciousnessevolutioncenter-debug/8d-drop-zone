@@ -428,6 +428,9 @@ HTML = """
                 <option value="fibonacci_spiral">Fibonacci Spiral — golden-angle path</option>
                 <option value="golden_figure8">Golden Figure 8 — φ front/back sweep</option>
                 <option value="lucas_breath">Lucas Breath — slow Fibonacci halo</option>
+                <option value="fibonacci_waltz">The Fibonacci Waltz — triple-meter golden sway you feel</option>
+                <option value="fibonacci_magic">Fibonacci Magic — shimmering node-hopping sparkle</option>
+                <option value="opus_fibonacci">Opus Fibonacci — flagship grand orbit, deepest feel</option>
                 <option value="fireflies_plus">Fireflies Plus — smooth premium orbit</option>
                 <option value="cinematic_halo">Cinematic Halo — elegant atmospheric surround</option>
                 <option value="figure8">Figure 8 — front/back immersive sweep</option>
@@ -660,6 +663,11 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             "fibonacci_spiral": dict(room_size=0.22, motion_depth=0.78, high_emphasis=0.74, spatial_mix=0.68, center_focus=0.62, felt_presence=0.80),
             "golden_figure8": dict(room_size=0.18, motion_depth=0.72, high_emphasis=0.68, spatial_mix=0.62, center_focus=0.70, felt_presence=0.74),
             "lucas_breath": dict(room_size=0.24, motion_depth=0.64, high_emphasis=0.64, spatial_mix=0.60, center_focus=0.78, felt_presence=0.68),
+            # Felt-first Fibonacci trio (source-method panning + reverb movement),
+            # tuned so the listener physically feels the motion and low end.
+            "fibonacci_waltz": dict(room_size=0.22, motion_depth=0.80, high_emphasis=0.66, spatial_mix=0.66, center_focus=0.70, felt_presence=0.84),
+            "fibonacci_magic": dict(room_size=0.26, motion_depth=0.88, high_emphasis=0.82, spatial_mix=0.72, center_focus=0.58, felt_presence=0.88),
+            "opus_fibonacci": dict(room_size=0.30, motion_depth=0.96, high_emphasis=0.74, spatial_mix=0.78, center_focus=0.62, felt_presence=0.96),
             "wide_orbit": dict(room_size=0.20, motion_depth=0.82, high_emphasis=0.72, spatial_mix=0.70, center_focus=0.50, felt_presence=0.84),
             "vocal_safe": dict(room_size=0.14, motion_depth=0.50, high_emphasis=0.52, spatial_mix=0.48, center_focus=0.88, felt_presence=0.56),
             "cinematic_halo": dict(room_size=0.24, motion_depth=0.68, high_emphasis=0.66, spatial_mix=0.62, center_focus=0.74, felt_presence=0.74),

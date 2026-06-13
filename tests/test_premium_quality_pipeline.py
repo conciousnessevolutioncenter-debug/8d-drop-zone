@@ -227,6 +227,9 @@ def test_fibonacci_golden_ratio_preset_suite_is_registered():
         "fibonacci_spiral",
         "golden_figure8",
         "lucas_breath",
+        "fibonacci_waltz",
+        "fibonacci_magic",
+        "opus_fibonacci",
     }
     assert fib_names.issubset(names)
 
