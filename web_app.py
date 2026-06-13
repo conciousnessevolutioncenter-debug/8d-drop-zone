@@ -46,7 +46,7 @@ APP_DIR = Path(tempfile.gettempdir()) / "8d_dropzone_live"
 APP_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_SECONDS = 60 * 60
 MAX_UPLOAD_MINUTES = MAX_UPLOAD_SECONDS // 60
-MAX_UPLOAD_MB = 50
+MAX_UPLOAD_MB = 200
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 JOBS = {}
 JOBS_LOCK = Lock()
@@ -534,7 +534,7 @@ zone.addEventListener('dragleave', e => { if (zone.contains(e.relatedTarget)) re
 zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('hover'); title.textContent = DSP_OK ? 'Drop your track here' : 'Run locally to master tracks'; const f = e.dataTransfer.files[0]; if (f && DSP_OK) upload(f); });
 file.addEventListener('change', e => { const f = e.target.files[0]; if (f && DSP_OK) upload(f); });
 
-const MAX_UPLOAD_MB = 50;
+const MAX_UPLOAD_MB = 200;
 async function upload(f) {
   if (!DSP_OK) return;
   const mb = (f.size / 1048576).toFixed(1);
