@@ -364,8 +364,11 @@ HTML = """
     .profile-detail p{ color:var(--soft); font-size:13px; line-height:1.65; margin:10px 0 0; }
     .profile-detail .pd-best{ color:var(--ink); }
 
-    .foot{ display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:64px; padding-top:20px; border-top:1px solid var(--hair); }
+    .foot{ display:flex; flex-direction:column; gap:12px; margin-top:64px; padding-top:20px; border-top:1px solid var(--hair); }
+    .foot-row{ display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
     .foot .word{ font-family:var(--display); letter-spacing:.22em; font-size:13px; }
+    .foot .credit{ font-family:var(--mono); font-size:11px; letter-spacing:.04em; color:var(--soft); }
+    .foot .credit b{ color:var(--ink); font-weight:500; }
 
     @media (max-width:980px){
       .hero{ grid-template-columns:1fr; }
@@ -504,8 +507,11 @@ HTML = """
     <div class="profile-detail" id="profileDetail" aria-live="polite"></div>
 
     <footer class="foot">
-      <span class="word">THE 8D ENGINE</span>
-      <span class="tlabel">64-bit DSP · Mono-safe bass · 32-bit WAV export</span>
+      <div class="foot-row">
+        <span class="word">THE 8D ENGINE</span>
+        <span class="tlabel">64-bit DSP · Mono-safe bass · 32-bit WAV export</span>
+      </div>
+      <div class="credit">The 8D Engine — created by <b>Christ Dejon</b> and <b>Noel De Brackinghe</b></div>
     </footer>
   </main>
 <script>
