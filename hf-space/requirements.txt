@@ -1,0 +1,7 @@
+# Pinned so torchaudio uses its built-in loader (newer torchaudio offloads to
+# torchcodec, which isn't present on the free Space and breaks Demucs's loader).
+torch==2.1.2
+torchaudio==2.1.2
+demucs==4.0.1
+soundfile>=0.12
+gradio==4.44.0

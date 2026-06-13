@@ -779,6 +779,54 @@ def _separate_stems_replicate(src: Path, work_dir: Path):
     return stems
 
 
+def _separate_stems_hf_space(src: Path, work_dir: Path):
+    """Separate stems with a free Hugging Face Space running Demucs.
+
+    Calls the Space's ``/separate`` endpoint via gradio_client (no local
+    torch/RAM), copies the returned stem files into ``work_dir`` (so the zip step
+    packages them), and returns ``{name: StemData}``. Raises
+    :class:`StemSeparationUnavailable` on any problem so the caller falls back.
+
+    Set ``HF_SPACE_ID`` (e.g. "username/8d-demucs-stems"); ``HF_TOKEN`` optional.
+    Privacy note: this uploads the user's audio to the Space (Hugging Face).
+    """
+    import shutil
+
+    space_id = os.environ.get("HF_SPACE_ID")
+    if not space_id:
+        raise StemSeparationUnavailable("HF_SPACE_ID is not set")
+    try:
+        from gradio_client import Client, handle_file
+    except Exception as exc:  # pragma: no cover - env-specific
+        raise StemSeparationUnavailable(f"gradio_client not installed: {exc}")
+
+    hf_token = os.environ.get("HF_TOKEN")
+    try:
+        client = Client(space_id, hf_token=hf_token) if hf_token else Client(space_id)
+        result = client.predict(handle_file(str(src)), api_name="/separate")
+    except Exception as exc:
+        raise StemSeparationUnavailable(f"HF Space separation failed: {exc}")
+
+    paths = list(result) if isinstance(result, (list, tuple)) else [result]
+    names = ["vocals", "drums", "bass", "other"]
+    work_dir.mkdir(parents=True, exist_ok=True)
+    stems: dict = {}
+    for i, fp in enumerate(paths):
+        if not fp:
+            continue
+        name = names[i] if i < len(names) else f"stem{i}"
+        dest = work_dir / f"{name}.wav"
+        try:
+            shutil.copyfile(str(fp), dest)
+        except Exception as exc:
+            raise StemSeparationUnavailable(f"Could not read returned stem {name!r}: {exc}")
+        loaded = load_audio(dest)
+        stems[name] = StemData(loaded.samples, loaded.sample_rate)
+    if not stems:
+        raise StemSeparationUnavailable("HF Space returned no stems")
+    return stems
+
+
 def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = "", stem_mode: str = "classic"):
     import time as _time
     _t0 = _time.time()
@@ -864,10 +912,16 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             audio = load_audio(src)  # AI-stem path needs the full mix as a reference
             try:
                 stem_dir = APP_DIR / f"{job_id}_stems"
-                # Prefer hosted separation (Replicate) when configured — no local
-                # torch/RAM needed. Otherwise use a local Demucs install. Either
-                # way, fall back to the classic render if neither is available.
-                if os.environ.get("REPLICATE_API_TOKEN"):
+                # Pick a separation engine, cheapest/preferred first; any failure
+                # falls back to the classic full-mix render so a job never breaks.
+                #   1. Free Hugging Face Space (HF_SPACE_ID)
+                #   2. Replicate (REPLICATE_API_TOKEN, paid)
+                #   3. Local Demucs install
+                if os.environ.get("HF_SPACE_ID"):
+                    _set_job(job_id, message="Separating stems on the free Demucs cloud (first run may take a minute)…", stem_mode=requested_stem_mode)
+                    stems = _separate_stems_hf_space(src, stem_dir)
+                    stem_engine = "hf_space_demucs"
+                elif os.environ.get("REPLICATE_API_TOKEN"):
                     _set_job(job_id, message="Separating stems with hosted AI (Replicate)…", stem_mode=requested_stem_mode)
                     stems = _separate_stems_replicate(src, stem_dir)
                     stem_engine = "replicate_demucs"

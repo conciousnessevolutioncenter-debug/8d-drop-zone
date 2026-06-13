@@ -9,7 +9,9 @@ numpy>=1.24
 scipy>=1.10
 soundfile>=0.12
 pydub>=0.25
-# Optional: hosted AI stem separation (Demucs on Replicate). Tiny API client,
-# no torch. Activates only when REPLICATE_API_TOKEN is set; otherwise the app
-# falls back to the classic full-mix render.
+# Optional: hosted AI stem separation. Tiny API clients, no torch.
+#  - Replicate (paid per-use): activates when REPLICATE_API_TOKEN is set.
+#  - Hugging Face Space (free 16 GB tier): activates when HF_SPACE_ID is set.
+# Both fall back to the classic full-mix render when unset/unavailable.
 replicate>=0.25
+gradio_client>=1.0
