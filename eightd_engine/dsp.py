@@ -1065,45 +1065,44 @@ def _rms_chunked(x: np.ndarray, step: int = 1 << 20) -> float:
     return float(np.sqrt(total / max(1, count) + 1e-18))
 
 
+def _master_gain(peak: float, out_rms: float, ref_rms: float, youtube_master: bool, preserve_quality: bool) -> float:
+    """Compute the single global master gain scalar.
+
+    Shared by the in-memory (:func:`_master_inplace`) and the streaming
+    (:func:`render_8d_to_wav`) paths so both apply an identical gain. Mirrors
+    :func:`_final_master` exactly, but as a pure scalar given pre-measured
+    global ``peak`` and ``out_rms``.
+    """
+    if youtube_master:
+        if out_rms <= 1e-12:
+            return 1.0
+        g = db_to_linear(-13.0) / out_rms
+        peak_after = peak * g
+        ceiling = db_to_linear(-1.0)
+        if peak_after > ceiling and peak_after > 0.0:
+            g *= ceiling / peak_after
+        return g
+    if preserve_quality:
+        peak_ceiling = db_to_linear(-1.0)
+        peak_gain = (peak_ceiling / peak) if peak > peak_ceiling and peak > 0.0 else 1.0
+        max_rms = ref_rms * db_to_linear(0.25)
+        rms_gain = (max_rms / out_rms) if out_rms > max_rms and out_rms > 0.0 else 1.0
+        return min(peak_gain, rms_gain, 1.0)
+    return (0.98 / peak) if peak > 0.98 and peak > 0.0 else 1.0
+
+
 def _master_inplace(out: np.ndarray, ref_rms: float, youtube_master: bool, preserve_quality: bool) -> None:
     """Apply the single global master gain to ``out`` IN PLACE.
 
-    This is the memory-frugal twin of :func:`_final_master` used by the blocked
-    long-track path.  It computes the peak/RMS with chunked passes (no
-    full-length abs() or float64 copies) and scales ``out`` with ``*=`` instead
-    of allocating a new full-length result, which is what previously spiked RAM
-    past the container limit at the very end of a long render.
+    Memory-frugal twin of :func:`_final_master`: measures peak/RMS with chunked
+    passes (no full-length abs()/float64 copies) and scales ``out`` with ``*=``
+    instead of allocating a new full-length result.
     """
-    n = len(out)
-    if n == 0:
+    if len(out) == 0:
         return
-    if youtube_master:
-        cur = _rms_chunked(out)
-        if cur <= 1e-12:
-            return
-        gained = db_to_linear(-13.0) / cur
-        peak_after = _max_abs_chunked(out) * gained
-        ceiling = db_to_linear(-1.0)
-        if peak_after > ceiling and peak_after > 0.0:
-            gained *= ceiling / peak_after
-        if gained != 1.0:
-            out *= np.float32(gained)
-        return
-    if preserve_quality:
-        peak = _max_abs_chunked(out)
-        peak_ceiling = db_to_linear(-1.0)
-        peak_gain = (peak_ceiling / peak) if peak > peak_ceiling and peak > 0.0 else 1.0
-        out_rms = _rms_chunked(out)
-        max_rms = ref_rms * db_to_linear(0.25)
-        rms_gain = (max_rms / out_rms) if out_rms > max_rms and out_rms > 0.0 else 1.0
-        gain = min(peak_gain, rms_gain, 1.0)
-        if gain != 1.0:
-            out *= np.float32(gain)
-        return
-    # default: peak-normalize to 0.98 ceiling
-    peak = _max_abs_chunked(out)
-    if peak > 0.98 and peak > 0.0:
-        out *= np.float32(0.98 / peak)
+    gain = _master_gain(_max_abs_chunked(out), _rms_chunked(out), ref_rms, youtube_master, preserve_quality)
+    if gain != 1.0:
+        out *= np.float32(gain)
 
 
 def _final_master(mixed: np.ndarray, reference: np.ndarray, youtube_master: bool, preserve_quality: bool) -> np.ndarray:
@@ -1204,3 +1203,114 @@ def process_8d(
     # of a long render from spiking RAM past the container limit.
     _master_inplace(out, ref_rms, youtube_master, preserve_quality)
     return AudioData(samples=out, sample_rate=sr)
+
+
+def render_8d_to_wav(
+    audio: AudioData,
+    out_path,
+    on_progress=None,
+    **params,
+) -> "CorrelationReport":
+    """Render an 8D track straight to a float WAV file, block by block.
+
+    This is the memory-bounded path for *long* tracks. Unlike :func:`process_8d`
+    it never holds the full-length rendered output in RAM — each block is written
+    to disk as it is produced — so peak memory no longer grows with the output
+    length (only the input array and one block's working set are resident).
+
+    The final master is a single global gain, so it needs whole-file peak/RMS.
+    We therefore use two streaming passes: pass 1 renders blocks to a temp WAV
+    while accumulating peak/RMS and stereo-correlation stats; pass 2 streams that
+    temp file back, applies the one master gain, and writes the final WAV. Output
+    is bit-identical to ``export_audio(process_8d(...))`` for the same params.
+
+    Returns the :class:`CorrelationReport` (computed during pass 1) so the caller
+    does not need a separate full-length :func:`analyze_correlation` pass.
+    """
+    import soundfile as sf
+    from pathlib import Path
+
+    out_path = Path(out_path)
+    youtube_master = bool(params.get("youtube_master", False))
+    preserve_quality = bool(params.get("preserve_quality", False))
+
+    samples = ensure_stereo_float(audio.samples)
+    sr = int(audio.sample_rate)
+    n = len(samples)
+    block = _BLOCK_SECONDS * sr
+    pad = int(_BLOCK_PAD_SECONDS * sr)
+    ref_rms = _rms_chunked(samples)
+
+    peak = 0.0
+    sumsq = 0.0           # for global RMS
+    count = 0
+    s_ll = s_rr = s_lr = s_l = s_r = 0.0   # stereo correlation accumulators
+    s_mm = s_ss = 0.0                       # mid / side energy
+
+    tmp_path = out_path.parent / (out_path.stem + ".rawtmp.wav")
+    with sf.SoundFile(str(tmp_path), mode="w", samplerate=sr, channels=2, subtype="FLOAT") as raw:
+        pos = 0
+        while pos < n:
+            end = min(pos + block, n)
+            lo = max(0, pos - pad)
+            hi = min(n, end + pad)
+            segment = AudioData(samples=np.ascontiguousarray(samples[lo:hi]), sample_rate=sr)
+            rendered = _process_8d_core(
+                segment, _start_frame=lo, _total_frames=n, _do_final_normalize=False, **params
+            ).samples
+            kept = rendered[pos - lo: pos - lo + (end - pos)]
+
+            k = kept.astype(np.float64)
+            L, R = k[:, 0], k[:, 1]
+            seg_peak = float(np.max(np.abs(k))) if k.size else 0.0
+            if seg_peak > peak:
+                peak = seg_peak
+            sumsq += float(np.sum(k * k)); count += k.shape[0] * 2
+            s_ll += float(np.sum(L * L)); s_rr += float(np.sum(R * R)); s_lr += float(np.sum(L * R))
+            s_l += float(np.sum(L)); s_r += float(np.sum(R))
+            mid = (L + R) * 0.5; side = (L - R) * 0.5
+            s_mm += float(np.sum(mid * mid)); s_ss += float(np.sum(side * side))
+
+            raw.write(kept)
+            if on_progress is not None:
+                on_progress(end, n)
+            del segment, rendered, kept, k, L, R, mid, side
+            pos = end
+
+    del samples  # free the full-length source before pass 2
+
+    out_rms = float(np.sqrt(sumsq / max(1, count) + 1e-18))
+    gain = _master_gain(peak, out_rms, ref_rms, youtube_master, preserve_quality)
+    # Mirror export_audio's normalize_peak(0.98): a no-op once the master gain
+    # has already brought the peak under the ceiling, but kept for exactness.
+    final_peak = peak * gain
+    if final_peak > 0.98 and final_peak > 0.0:
+        gain *= 0.98 / final_peak
+    g32 = np.float32(gain)
+
+    with sf.SoundFile(str(tmp_path)) as raw, sf.SoundFile(
+        str(out_path), mode="w", samplerate=sr, channels=2, subtype="FLOAT"
+    ) as final:
+        for blk in raw.blocks(blocksize=1 << 18, dtype="float32"):
+            final.write(blk * g32 if gain != 1.0 else blk)
+    tmp_path.unlink(missing_ok=True)
+
+    # Correlation report from streamed accumulators (matches analyze_correlation).
+    nf = max(1, count // 2)
+    var_l = s_ll / nf - (s_l / nf) ** 2
+    var_r = s_rr / nf - (s_r / nf) ** 2
+    cov = s_lr / nf - (s_l / nf) * (s_r / nf)
+    if var_l < 1e-24 or var_r < 1e-24:
+        corr = 1.0
+    else:
+        corr = float(cov / np.sqrt(var_l * var_r))
+        if not np.isfinite(corr):
+            corr = 1.0
+    rms_side = np.sqrt(s_ss / nf + 1e-18)
+    rms_mid = np.sqrt(s_mm / nf + 1e-18)
+    ratio = float(rms_side / (rms_mid + 1e-12))
+    return CorrelationReport(
+        correlation=corr,
+        side_mid_ratio=ratio,
+        phase_warning=bool(corr < -0.15 or ratio > 1.35),
+    )

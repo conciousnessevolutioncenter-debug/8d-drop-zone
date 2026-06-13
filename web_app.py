@@ -30,6 +30,7 @@ else:
             estimate_bpm,
             panning_preset_names,
             process_8d,
+            render_8d_to_wav,
         )
         from eightd_engine.stems import (
             StemData,
@@ -734,10 +735,16 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                     center_focus=settings["center_focus"],
                     felt_presence=settings["felt_presence"],
                 )
+            report = analyze_correlation(rendered.samples)
+            export_audio(rendered, out)
         else:
-            _log("calling process_8d (classic)")
-            rendered = process_8d(
+            # Classic full-mix path streams the render straight to the WAV file
+            # block-by-block, so peak RAM does not grow with the output length
+            # (long tracks no longer need the whole rendered song held in memory).
+            _log("calling render_8d_to_wav (classic, streaming)")
+            report = render_8d_to_wav(
                 audio,
+                out,
                 rotation_cpm=rotation_cpm,
                 room_size=settings["room_size"],
                 crossover_hz=150.0,
@@ -752,11 +759,8 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                 center_focus=settings["center_focus"],
                 felt_presence=settings["felt_presence"],
             )
-            _log("process_8d complete")
+            _log("render_8d_to_wav complete")
         _set_job(job_id, message="Writing WAV export…")
-        _log("exporting WAV")
-        report = analyze_correlation(rendered.samples)
-        export_audio(rendered, out)
         _set_job(
             job_id,
             status="complete",
