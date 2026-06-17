@@ -130,3 +130,14 @@ class Report(Base):
     target_id = Column(Integer, nullable=False)
     reason = Column(String(280), nullable=False, default="")
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(20), nullable=False)          # 'follow' | 'comment' | 'dm'
+    text = Column(String(200), nullable=False)
+    link = Column(String(200), nullable=False, default="")
+    read = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now, index=True)

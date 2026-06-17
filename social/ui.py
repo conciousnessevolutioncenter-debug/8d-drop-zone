@@ -55,7 +55,20 @@ def layout(title: str, body: str, user: User | None = None, active: str = "") ->
         nav_items.append(("billing", "/social/billing", "Plans"))
         nav_items.append(("me", f"/social/u/{user.handle}", "Profile"))
         badge = f'<span class="pro">{html.escape(_ent.label(user)).upper()}</span>' if _ent.is_paid(user) else ""
-        right = badge + f'<a href="/social/logout" class="tag">LOGOUT</a><span class="avatar"></span>'
+        bell = ""
+        try:
+            from .db import SessionLocal
+            from .notify import unread_count
+            _db = SessionLocal()
+            try:
+                n = unread_count(_db, user.id)
+            finally:
+                _db.close()
+            count = f'<span style="color:#06101c;background:var(--cyan);border-radius:999px;font-size:9px;padding:1px 5px;margin-left:3px">{n}</span>' if n else ""
+            bell = f'<a href="/social/notifications" class="tag" title="Notifications">◉{count}</a>'
+        except Exception:
+            bell = ""
+        right = bell + badge + f'<a href="/social/logout" class="tag">LOGOUT</a><span class="avatar"></span>'
     else:
         right = '<a href="/social/login" class="tag">LOGIN</a><a href="/social/register" class="pro">JOIN</a>'
     nav = "".join(

@@ -13,9 +13,10 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import User, Post, Like, Follow, Comment
+from .models import User, Post, Like, Follow, Comment, Notification
 from .security import hash_password, verify_password, login_session, logout_session, optional_user, current_user
 from .ui import layout, esc
+from .notify import create_notification
 
 router = APIRouter(prefix="/social", tags=["social"])
 _HANDLE_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -239,8 +240,11 @@ def repost(post_id: int, request: Request, db: Session = Depends(get_db),
 def add_comment(post_id: int, request: Request, db: Session = Depends(get_db),
                 body: str = Form(""), user: User = Depends(current_user)):
     text = (body or "").strip()
-    if text and db.get(Post, post_id):
+    post = db.get(Post, post_id)
+    if text and post:
         db.add(Comment(post_id=post_id, author_id=user.id, body=text[:2000]))
+        if post.author_id != user.id:
+            create_notification(db, post.author_id, "comment", f"@{user.handle} commented on your post", f"/social/p/{post_id}")
         db.commit()
     return RedirectResponse(f"/social/p/{post_id}", status_code=303)
 
@@ -269,6 +273,28 @@ def post_detail(post_id: int, request: Request, db: Session = Depends(get_db)):
     head = '<a href="/social" class="tag" style="color:var(--cyan)">← BACK TO FEED</a>'
     body_html = head + card + f'<div class="tag" style="margin-top:18px">{len(comments)} COMMENTS</div>' + clist + composer
     return HTMLResponse(layout("Post", body_html, viewer, "feed"))
+
+
+@router.get("/notifications", response_class=HTMLResponse)
+def notifications(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rows = db.scalars(
+        select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at.desc()).limit(60)
+    ).all()
+    items = ""
+    for n in rows:
+        when = n.created_at.strftime("%b %d, %H:%M") if n.created_at else ""
+        dot = '<span style="color:var(--cyan)">●</span> ' if not n.read else ""
+        icon = {"follow": "+", "comment": "💬", "dm": "✉"}.get(n.kind, "•")
+        items += (f'<a href="{esc(n.link) or "/social"}" class="card" style="display:block;margin-top:10px;padding:11px 14px">'
+                  f'<div class="row" style="gap:10px">{dot}<span>{icon}</span>'
+                  f'<span style="font-size:13.5px">{esc(n.text)}</span>'
+                  f'<span class="handle" style="margin-left:auto">{when}</span></div></a>')
+    # mark all read once viewed
+    for n in rows:
+        n.read = True
+    db.commit()
+    body = '<h1>Notifications</h1>' + (items or '<p class="muted" style="margin-top:14px">Nothing yet.</p>')
+    return HTMLResponse(layout("Notifications", body, user, "notifs"))
 
 
 @router.get("/u/{handle}", response_class=HTMLResponse)
@@ -306,7 +332,9 @@ def profile(handle: str, request: Request, db: Session = Depends(get_db)):
 def follow(handle: str, request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
     target = db.scalar(select(User).where(User.handle == handle.lower()))
     if target and target.id != user.id and not db.get(Follow, {"follower_id": user.id, "followee_id": target.id}):
-        db.add(Follow(follower_id=user.id, followee_id=target.id)); db.commit()
+        db.add(Follow(follower_id=user.id, followee_id=target.id))
+        create_notification(db, target.id, "follow", f"@{user.handle} followed you", f"/social/u/{user.handle}")
+        db.commit()
     return RedirectResponse(f"/social/u/{handle.lower()}", status_code=303)
 
 

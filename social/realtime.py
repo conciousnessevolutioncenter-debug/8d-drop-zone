@@ -240,7 +240,11 @@ async def ws_dm(ws: WebSocket, thread_id: int):
                 if not body:
                     continue
                 msg = Message(thread_id=thread_id, sender_id=uid, body=body)
-                db.add(msg); db.commit(); db.refresh(msg)
+                db.add(msg)
+                other_id = t.user_b if t.user_a == uid else t.user_a
+                from .notify import create_notification
+                create_notification(db, other_id, "dm", f"New message from @{user.handle}", f"/social/dm/{user.handle}")
+                db.commit(); db.refresh(msg)
                 await hub.broadcast(channel, {
                     "type": "msg", "handle": user.handle, "display": user.display_name or user.handle,
                     "body": body, "ts": msg.created_at.strftime("%H:%M"), "sender_id": uid,
