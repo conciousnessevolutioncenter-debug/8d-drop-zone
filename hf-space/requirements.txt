@@ -1,14 +1,12 @@
-# CPU-only PyTorch wheels — the free Space has no GPU, and the default CUDA
-# build of torch is ~2.5 GB and blows the build. 2.2.2 is the oldest +cpu wheel
-# still published on the index, and its torchaudio still has the built-in audio
-# loader (newer torchaudio offloads to torchcodec, which the Space doesn't have).
+# CPU-only PyTorch wheels (no GPU on the free Space; the CUDA build is ~2.5 GB).
+# torch 2.3.1 supports numpy 2, which gradio 6 pulls in; torchaudio 2.3 still has
+# the built-in audio loader (newer torchaudio offloads to torchcodec).
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.2+cpu
-torchaudio==2.2.2+cpu
-# Demucs separator + audio I/O + the Gradio UI/API.
+torch==2.3.1+cpu
+torchaudio==2.3.1+cpu
+# Demucs separator + audio I/O.
 demucs==4.0.1
 soundfile>=0.12
-gradio==4.44.0
-# Pin huggingface_hub: gradio 4.44 imports HfFolder, which huggingface_hub 1.x
-# removed — the unpinned latest breaks the app at startup (RUNTIME_ERROR).
-huggingface_hub==0.25.2
+# gradio 6 — 4.44 had a schema bug (bool in API schema) that crashed the app at
+# runtime; 6.x fixes it and its bundled gradio_client matches.
+gradio==6.18.0
