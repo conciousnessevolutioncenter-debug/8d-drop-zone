@@ -3,9 +3,12 @@ mounted under /social so the audio app routes are untouched."""
 from __future__ import annotations
 
 import re
+import tempfile
+import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy import select, func, delete
 from sqlalchemy.orm import Session
 
@@ -18,6 +21,13 @@ router = APIRouter(prefix="/social", tags=["social"])
 _HANDLE_RE = re.compile(r"^[a-z0-9_]{3,30}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Post-image storage. Dev: a temp dir served by the route below. Prod: point at a
+# persistent volume or swap to S3/R2 (the container's temp dir is ephemeral).
+MEDIA_DIR = Path(tempfile.gettempdir()) / "8d_social_media"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+_IMG_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
+_MAX_IMG = 8 * 1024 * 1024
+
 
 def _counts(db: Session, user: User):
     followers = db.scalar(select(func.count()).select_from(Follow).where(Follow.followee_id == user.id))
@@ -26,25 +36,48 @@ def _counts(db: Session, user: User):
     return followers or 0, following or 0, posts or 0
 
 
-def _post_card(db: Session, post: Post, viewer: User | None) -> str:
+def _post_body(db: Session, post: Post, viewer: User | None) -> str:
+    """The inner content of a post (author header, text, image, track)."""
     a = post.author
-    likes = db.scalar(select(func.count()).select_from(Like).where(Like.post_id == post.id)) or 0
-    ncomments = db.scalar(select(func.count()).select_from(Comment).where(Comment.post_id == post.id)) or 0
     pro = '<span class="pro" style="margin-left:6px">PRO</span>' if a.is_pro else ""
+    when = post.created_at.strftime("%b %d, %H:%M") if post.created_at else ""
+    text = f'<p style="margin:10px 0 0;font-size:14px;line-height:1.55;color:#cdd7ea">{esc(post.body)}</p>' if post.body else ""
+    img = (f'<img src="{esc(post.image_url)}" alt="post image" '
+           f'style="margin-top:10px;max-width:100%;border-radius:11px;border:1px solid var(--hair)">') if post.image_url else ""
     track = ""
     if post.track_job_id:
-        track = ('<div class="row card" style="border-color:rgba(98,224,255,.25);background:rgba(98,224,255,.05);margin-top:10px;padding:9px 11px">'
+        track = ('<div class="row" style="border:1px solid rgba(98,224,255,.25);background:rgba(98,224,255,.05);'
+                 'border-radius:11px;margin-top:10px;padding:9px 11px">'
                  '<span class="tag" style="color:var(--cyan)">8D TRACK ATTACHED</span></div>')
-    when = post.created_at.strftime("%b %d, %H:%M") if post.created_at else ""
-    like_link = f'<a href="/social/posts/{post.id}/like" onclick="event.preventDefault();fetch(this.href,{{method:\'POST\'}}).then(()=>location.reload())">♥ {likes}</a>' if viewer else f'♥ {likes}'
-    return f"""<div class="card">
-      <div class="row"><span class="avatar"></span>
-        <div><div style="font-size:13px;font-weight:500">{esc(a.display_name or a.handle)}{pro}</div>
-        <a href="/social/u/{esc(a.handle)}" class="handle">@{esc(a.handle)} · {when}</a></div></div>
-      <p style="margin:10px 0 0;font-size:14px;line-height:1.55;color:#cdd7ea">{esc(post.body)}</p>
-      {track}
-      <div class="post-actions">{like_link}<span>💬 {ncomments}</span><span>↻ repost</span></div>
-    </div>"""
+    return (f'<div class="row"><span class="avatar"></span>'
+            f'<div><div style="font-size:13px;font-weight:500">{esc(a.display_name or a.handle)}{pro}</div>'
+            f'<a href="/social/u/{esc(a.handle)}" class="handle">@{esc(a.handle)} · {when}</a></div></div>'
+            f'{text}{img}{track}')
+
+
+def _post_card(db: Session, post: Post, viewer: User | None) -> str:
+    # Render a repost as a thin "reposted by" wrapper around the original.
+    repost_header = ""
+    target = post
+    if post.repost_of:
+        original = db.get(Post, post.repost_of)
+        repost_header = f'<div class="handle" style="margin-bottom:8px">↻ {esc(post.author.handle)} reposted</div>'
+        if not original:
+            return f'<div class="card">{repost_header}<p class="muted">The original post was removed.</p></div>'
+        target = original
+
+    likes = db.scalar(select(func.count()).select_from(Like).where(Like.post_id == target.id)) or 0
+    ncomments = db.scalar(select(func.count()).select_from(Comment).where(Comment.post_id == target.id)) or 0
+    like = (f'<a href="/social/posts/{target.id}/like" onclick="event.preventDefault();'
+            f"fetch(this.href,{{method:'POST'}}).then(()=>location.reload())\">♥ {likes}</a>") if viewer else f"♥ {likes}"
+    comment = f'<a href="/social/p/{target.id}">💬 {ncomments}</a>'
+    if viewer:
+        repost = (f'<a href="/social/posts/{target.id}/repost" onclick="event.preventDefault();'
+                  f"fetch(this.href,{{method:'POST'}}).then(()=>location.reload())\">↻ repost</a>")
+    else:
+        repost = "↻ repost"
+    return (f'<div class="card">{repost_header}{_post_body(db, target, viewer)}'
+            f'<div class="post-actions">{like}{comment}{repost}</div></div>')
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -62,8 +95,10 @@ def feed(request: Request, db: Session = Depends(get_db)):
         select(Post).where((Post.author_id == user.id) | (Post.author_id.in_(followed)))
         .order_by(Post.created_at.desc()).limit(50)
     ).all()
-    composer = """<div class="card"><form method="post" action="/social/posts">
+    composer = """<div class="card"><form method="post" action="/social/posts" enctype="multipart/form-data">
       <textarea name="body" placeholder="Share a track or a thought…" maxlength="2000"></textarea>
+      <label style="margin-top:10px">Image (optional)</label>
+      <input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp">
       <button class="btn" type="submit">Post</button></form></div>"""
     feed_html = "".join(_post_card(db, p, user) for p in rows) or '<p class="muted" style="margin-top:16px">Your feed is quiet — follow some creators or post something.</p>'
     return HTMLResponse(layout("Feed", composer + feed_html, user, "feed"))
@@ -136,15 +171,43 @@ def logout(request: Request):
     return RedirectResponse("/social", status_code=303)
 
 
+async def _save_image(image: UploadFile | None) -> str | None:
+    """Persist an uploaded image (validated) and return its served URL, or None."""
+    if not image or not image.filename:
+        return None
+    ext = _IMG_EXT.get((image.content_type or "").lower())
+    if not ext:
+        return None  # silently ignore non-images rather than failing the post
+    data = await image.read(_MAX_IMG + 1)
+    if not data or len(data) > _MAX_IMG:
+        return None
+    name = f"{uuid.uuid4().hex}{ext}"
+    (MEDIA_DIR / name).write_bytes(data)
+    return f"/social/media/{name}"
+
+
 @router.post("/posts")
-def create_post(request: Request, db: Session = Depends(get_db),
-                body: str = Form(""), track_job_id: str = Form(None),
-                user: User = Depends(current_user)):
+async def create_post(request: Request, db: Session = Depends(get_db),
+                      body: str = Form(""), track_job_id: str = Form(None),
+                      image: UploadFile = File(None),
+                      user: User = Depends(current_user)):
     text = (body or "").strip()
-    if text or track_job_id:
-        db.add(Post(author_id=user.id, body=text[:2000], track_job_id=track_job_id or None))
+    image_url = await _save_image(image)
+    if text or track_job_id or image_url:
+        db.add(Post(author_id=user.id, body=text[:2000], track_job_id=track_job_id or None, image_url=image_url))
         db.commit()
     return RedirectResponse("/social", status_code=303)
+
+
+@router.get("/media/{name}")
+def media(name: str):
+    # Path-safe: only a bare filename, must exist in the media dir.
+    if "/" in name or "\\" in name or ".." in name:
+        return HTMLResponse("bad path", status_code=400)
+    path = MEDIA_DIR / name
+    if not path.is_file():
+        return HTMLResponse("not found", status_code=404)
+    return FileResponse(str(path))
 
 
 @router.post("/posts/{post_id}/like")
@@ -157,6 +220,55 @@ def toggle_like(post_id: int, request: Request, db: Session = Depends(get_db),
         db.add(Like(user_id=user.id, post_id=post_id))
     db.commit()
     return {"ok": True}
+
+
+@router.post("/posts/{post_id}/repost")
+def repost(post_id: int, request: Request, db: Session = Depends(get_db),
+           user: User = Depends(current_user)):
+    target = db.get(Post, post_id)
+    if target:
+        # Collapse repost-of-repost to the original so embeds don't nest.
+        original_id = target.repost_of or target.id
+        if not db.scalar(select(Post).where(Post.author_id == user.id, Post.repost_of == original_id)):
+            db.add(Post(author_id=user.id, body="", repost_of=original_id))
+            db.commit()
+    return {"ok": True}
+
+
+@router.post("/posts/{post_id}/comment")
+def add_comment(post_id: int, request: Request, db: Session = Depends(get_db),
+                body: str = Form(""), user: User = Depends(current_user)):
+    text = (body or "").strip()
+    if text and db.get(Post, post_id):
+        db.add(Comment(post_id=post_id, author_id=user.id, body=text[:2000]))
+        db.commit()
+    return RedirectResponse(f"/social/p/{post_id}", status_code=303)
+
+
+@router.get("/p/{post_id}", response_class=HTMLResponse)
+def post_detail(post_id: int, request: Request, db: Session = Depends(get_db)):
+    viewer = optional_user(request, db)
+    post = db.get(Post, post_id)
+    if not post:
+        return HTMLResponse(layout("Not found", "<h1>Post not found</h1>", viewer), status_code=404)
+    card = _post_card(db, post, viewer)
+    comments = db.scalars(select(Comment).where(Comment.post_id == post_id).order_by(Comment.created_at)).all()
+    clist = ""
+    for cm in comments:
+        ca = db.get(User, cm.author_id)
+        when = cm.created_at.strftime("%b %d, %H:%M") if cm.created_at else ""
+        clist += (f'<div class="card" style="margin-top:10px;padding:11px 14px"><div class="row"><span class="avatar"></span>'
+                  f'<a href="/social/u/{esc(ca.handle)}" class="handle">@{esc(ca.handle)} · {when}</a></div>'
+                  f'<p style="margin:8px 0 0;font-size:13.5px;color:#cdd7ea">{esc(cm.body)}</p></div>')
+    if viewer:
+        composer = (f'<div class="card"><form method="post" action="/social/posts/{post_id}/comment">'
+                    f'<textarea name="body" placeholder="Add a comment…" maxlength="2000"></textarea>'
+                    f'<button class="btn" type="submit">Comment</button></form></div>')
+    else:
+        composer = '<p class="muted" style="margin-top:14px"><a href="/social/login" style="color:var(--cyan)">Sign in</a> to comment.</p>'
+    head = '<a href="/social" class="tag" style="color:var(--cyan)">← BACK TO FEED</a>'
+    body_html = head + card + f'<div class="tag" style="margin-top:18px">{len(comments)} COMMENTS</div>' + clist + composer
+    return HTMLResponse(layout("Post", body_html, viewer, "feed"))
 
 
 @router.get("/u/{handle}", response_class=HTMLResponse)

@@ -43,3 +43,4 @@ dist/
 social_dev.db
 social_test.db
 social.db
+social*.db
