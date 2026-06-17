@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import os
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Form, Request, WebSocket, WebSocketDisconnect
@@ -297,8 +298,9 @@ def _chat_shell(title: str, subtitle: str, ws_path: str, history: str, dm: bool 
       <div id="seen" class="handle" style="margin-top:6px;height:14px;text-align:right"></div>
     </div>
     <script>
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(proto + '://' + location.host + '{ws_path}');
+    const WS_BASE = "%WSBASE%";
+    const proto = WS_BASE ? 'wss' : (location.protocol === 'https:' ? 'wss' : 'ws');
+    const ws = new WebSocket(proto + '://' + (WS_BASE || location.host) + '{ws_path}');
     const log = document.getElementById('log'), inp = document.getElementById('msg');
     const esc = s => s.replace(/[&<>]/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c]));
     const DM = {str(dm).lower()};
@@ -316,7 +318,7 @@ def _chat_shell(title: str, subtitle: str, ws_path: str, history: str, dm: bool 
     document.getElementById('send').onclick = send;
     inp.addEventListener('keydown', e => {{ if(e.key==='Enter') send(); }});
     ws.onopen = () => {{ log.scrollTop = log.scrollHeight; if (DM) ws.send(JSON.stringify({{type:'read'}})); }};
-    </script>"""
+    </script>""".replace("%WSBASE%", os.environ.get("PUBLIC_WS_BASE", ""))
 
 
 def _chat_doc(title: str, body: str, user, active: str) -> str:
