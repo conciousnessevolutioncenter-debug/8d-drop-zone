@@ -17,6 +17,7 @@ from .models import User, Post, Like, Follow, Comment, Notification
 from .security import hash_password, verify_password, login_session, logout_session, optional_user, current_user
 from .ui import layout, esc, avatar_html
 from .notify import create_notification
+from .mailer import make_reset_token, read_reset_token, send_email, smtp_configured
 
 router = APIRouter(prefix="/social", tags=["social"])
 _HANDLE_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -155,7 +156,8 @@ def login_page(request: Request, db: Session = Depends(get_db)):
       <label>Email</label><input name="email" type="email" required>
       <label>Password</label><input name="password" type="password" required>
       <button class="btn" type="submit">Sign in</button></form></div>
-    <p class="muted" style="margin-top:12px">New here? <a href="/social/register" style="color:var(--cyan)">Create an account</a></p>"""
+    <p class="muted" style="margin-top:12px">New here? <a href="/social/register" style="color:var(--cyan)">Create an account</a>
+    &nbsp;·&nbsp; <a href="/social/reset-request" style="color:var(--cyan)">Forgot password?</a></p>"""
     return HTMLResponse(layout("Sign in", body, None))
 
 
@@ -175,6 +177,59 @@ def login(request: Request, db: Session = Depends(get_db),
 def logout(request: Request):
     logout_session(request)
     return RedirectResponse("/social", status_code=303)
+
+
+@router.get("/reset-request", response_class=HTMLResponse)
+def reset_request_page(request: Request):
+    body = """<h1>Reset your password</h1>
+    <p class="lede">Enter your email and we'll send a reset link.</p>
+    <div class="card"><form method="post" action="/social/reset-request">
+      <label>Email</label><input name="email" type="email" required>
+      <button class="btn" type="submit">Send reset link</button></form></div>"""
+    return HTMLResponse(layout("Reset password", body, None))
+
+
+@router.post("/reset-request", response_class=HTMLResponse)
+def reset_request(request: Request, db: Session = Depends(get_db), email: str = Form(...)):
+    user = db.scalar(select(User).where(User.email == email.strip().lower()))
+    if user:
+        token = make_reset_token(user.id)
+        link = f"{str(request.base_url).rstrip('/')}/social/reset/{token}"
+        send_email(user.email, "Reset your 8D Engine password",
+                   f"Tap to reset your password (valid 1 hour):\n\n{link}\n\nIf you didn't request this, ignore it.")
+    # Always the same response — never reveal whether an email exists.
+    note = "" if smtp_configured() else '<p class="muted" style="margin-top:10px">(Email isn\'t configured yet — the reset link is in the server logs.)</p>'
+    body = ('<h1>Check your email</h1><p class="lede">If an account exists for that address, '
+            'a reset link is on its way.</p>' + note +
+            '<a href="/social/login" class="btn ghost" style="margin-top:12px">Back to sign in</a>')
+    return HTMLResponse(layout("Reset password", body, None))
+
+
+@router.get("/reset/{token}", response_class=HTMLResponse)
+def reset_page(token: str, request: Request):
+    if read_reset_token(token) is None:
+        body = '<h1>Link expired</h1><p class="lede">That reset link is invalid or has expired.</p><a href="/social/reset-request" class="btn">Request a new one</a>'
+        return HTMLResponse(layout("Reset password", body, None), status_code=400)
+    body = f"""<h1>Set a new password</h1><div class="card"><form method="post" action="/social/reset/{esc(token)}">
+      <label>New password</label><input name="password" type="password" minlength="8" required>
+      <button class="btn" type="submit">Update password</button></form></div>"""
+    return HTMLResponse(layout("Reset password", body, None))
+
+
+@router.post("/reset/{token}", response_class=HTMLResponse)
+def reset_submit(token: str, request: Request, db: Session = Depends(get_db), password: str = Form(...)):
+    uid = read_reset_token(token)
+    if uid is None:
+        return HTMLResponse(layout("Reset password", '<h1>Link expired</h1><a href="/social/reset-request" class="btn">Request a new one</a>', None), status_code=400)
+    if len(password) < 8:
+        return HTMLResponse(layout("Reset password", f'<h1>Set a new password</h1><div class="card"><p class="err">Password must be at least 8 characters.</p><a href="/social/reset/{esc(token)}" class="btn ghost">Back</a></div>', None), status_code=400)
+    user = db.get(User, uid)
+    if user:
+        user.password_hash = hash_password(password)
+        db.commit()
+        login_session(request, user)
+        return RedirectResponse("/social", status_code=303)
+    return HTMLResponse(layout("Reset password", "<h1>Account not found</h1>", None), status_code=404)
 
 
 async def _save_image(image: UploadFile | None) -> str | None:

@@ -21,3 +21,5 @@ sqlalchemy>=2.0
 bcrypt>=4.0
 itsdangerous>=2.1
 psycopg2-binary>=2.9
+# Payments (Phase 4). Activates only when STRIPE_SECRET_KEY is set.
+stripe>=9.0

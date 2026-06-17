@@ -132,6 +132,13 @@ class Report(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 
 
+class WebhookEvent(Base):
+    """Idempotency guard — Stripe may deliver an event more than once."""
+    __tablename__ = "webhook_events"
+    stripe_event_id = Column(String(80), primary_key=True)
+    processed_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+
+
 class Notification(Base):
     __tablename__ = "notifications"
     id = Column(Integer, primary_key=True)
