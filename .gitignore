@@ -38,3 +38,8 @@ dist/
 # Claude Code tool state
 .claude/
 .vercel
+
+# Social dev database
+social_dev.db
+social_test.db
+social.db

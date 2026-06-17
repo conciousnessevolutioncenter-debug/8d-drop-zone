@@ -68,6 +68,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---- Social layer (additive). Guarded like the DSP imports: if its deps are
+# missing or the DB can't init, the audio tool keeps working untouched. ----
+SOCIAL_AVAILABLE = False
+try:
+    from starlette.middleware.sessions import SessionMiddleware
+    from social.routes import router as social_router
+    from social.realtime import rt_router as social_rt_router
+    from social.billing import billing_router as social_billing_router
+    from social.db import init_db as _social_init_db
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=os.environ.get("SESSION_SECRET", "dev-insecure-change-me"),
+        same_site="lax",
+        https_only=bool(os.environ.get("SESSION_HTTPS")),
+    )
+    app.include_router(social_router)
+    app.include_router(social_rt_router)
+    app.include_router(social_billing_router)
+    _social_init_db()
+    SOCIAL_AVAILABLE = True
+    print("[social] enabled at /social", flush=True)
+except Exception as _social_err:  # pragma: no cover - keeps audio app alive
+    print(f"[social] disabled: {_social_err}", flush=True)
+
 app.mount("/files", StaticFiles(directory=str(APP_DIR)), name="files")
 
 

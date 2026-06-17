@@ -15,3 +15,9 @@ pydub>=0.25
 # Both fall back to the classic full-mix render when unset/unavailable.
 replicate>=0.25
 gradio_client>=1.0
+# Social layer (auth, profiles, feed). SQLite for local dev; set DATABASE_URL to
+# a Postgres URL in production. itsdangerous backs the signed session cookie.
+sqlalchemy>=2.0
+bcrypt>=4.0
+itsdangerous>=2.1
+psycopg2-binary>=2.9
