@@ -9,3 +9,6 @@ torchaudio==2.2.2+cpu
 demucs==4.0.1
 soundfile>=0.12
 gradio==4.44.0
+# Pin huggingface_hub: gradio 4.44 imports HfFolder, which huggingface_hub 1.x
+# removed — the unpinned latest breaks the app at startup (RUNTIME_ERROR).
+huggingface_hub==0.25.2
