@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .db import get_db
 from .models import User, Post, Like, Follow, Comment, Notification
 from .security import hash_password, verify_password, login_session, logout_session, optional_user, current_user
-from .ui import layout, esc
+from .ui import layout, esc, avatar_html
 from .notify import create_notification
 
 router = APIRouter(prefix="/social", tags=["social"])
@@ -50,7 +50,7 @@ def _post_body(db: Session, post: Post, viewer: User | None) -> str:
         track = ('<div class="row" style="border:1px solid rgba(98,224,255,.25);background:rgba(98,224,255,.05);'
                  'border-radius:11px;margin-top:10px;padding:9px 11px">'
                  '<span class="tag" style="color:var(--cyan)">8D TRACK ATTACHED</span></div>')
-    return (f'<div class="row"><span class="avatar"></span>'
+    return (f'<div class="row">{avatar_html(a)}'
             f'<div><div style="font-size:13px;font-weight:500">{esc(a.display_name or a.handle)}{pro}</div>'
             f'<a href="/social/u/{esc(a.handle)}" class="handle">@{esc(a.handle)} · {when}</a></div></div>'
             f'{text}{img}{track}')
@@ -77,8 +77,13 @@ def _post_card(db: Session, post: Post, viewer: User | None) -> str:
                   f"fetch(this.href,{{method:'POST'}}).then(()=>location.reload())\">↻ repost</a>")
     else:
         repost = "↻ repost"
+    owner = ""
+    if viewer and viewer.id == target.author_id:
+        owner = (f'<a href="/social/p/{target.id}/edit" style="margin-left:auto">edit</a>'
+                 f'<a href="/social/posts/{target.id}/delete" onclick="event.preventDefault();'
+                 f"if(confirm('Delete this post?'))fetch(this.href,{{method:'POST'}}).then(()=>location.href='/social')\">delete</a>")
     return (f'<div class="card">{repost_header}{_post_body(db, target, viewer)}'
-            f'<div class="post-actions">{like}{comment}{repost}</div></div>')
+            f'<div class="post-actions">{like}{comment}{repost}{owner}</div></div>')
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -261,7 +266,7 @@ def post_detail(post_id: int, request: Request, db: Session = Depends(get_db)):
     for cm in comments:
         ca = db.get(User, cm.author_id)
         when = cm.created_at.strftime("%b %d, %H:%M") if cm.created_at else ""
-        clist += (f'<div class="card" style="margin-top:10px;padding:11px 14px"><div class="row"><span class="avatar"></span>'
+        clist += (f'<div class="card" style="margin-top:10px;padding:11px 14px"><div class="row">{avatar_html(ca)}'
                   f'<a href="/social/u/{esc(ca.handle)}" class="handle">@{esc(ca.handle)} · {when}</a></div>'
                   f'<p style="margin:8px 0 0;font-size:13.5px;color:#cdd7ea">{esc(cm.body)}</p></div>')
     if viewer:
@@ -316,7 +321,7 @@ def profile(handle: str, request: Request, db: Session = Depends(get_db)):
     else:
         action = '<a href="/social/login" class="btn">Sign in to follow</a>'
     pro = '<span class="pro" style="margin-left:8px">PRO</span>' if u.is_pro else ""
-    head = f"""<div class="card"><div class="row"><span class="big"></span>
+    head = f"""<div class="card"><div class="row">{avatar_html(u, 'big')}
       <div><div style="font-size:18px;font-weight:600">{esc(u.display_name or u.handle)}{pro}</div>
       <span class="handle">@{esc(u.handle)}</span></div>
       <span style="margin-left:auto">{action}</span></div>
@@ -348,7 +353,10 @@ def unfollow(handle: str, request: Request, db: Session = Depends(get_db), user:
 
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    body = f"""<h1>Edit profile</h1><div class="card"><form method="post" action="/social/settings">
+    body = f"""<h1>Edit profile</h1><div class="card"><form method="post" action="/social/settings" enctype="multipart/form-data">
+      <div class="row" style="gap:12px">{avatar_html(user, 'big')}<div class="muted">Your avatar</div></div>
+      <label>Avatar image (optional)</label>
+      <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif,image/webp">
       <label>Display name</label><input name="display_name" maxlength="80" value="{esc(user.display_name)}">
       <label>Bio</label><textarea name="bio" maxlength="280">{esc(user.bio)}</textarea>
       <button class="btn" type="submit">Save</button></form></div>"""
@@ -356,11 +364,76 @@ def settings_page(request: Request, db: Session = Depends(get_db), user: User = 
 
 
 @router.post("/settings")
-def save_settings(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user),
-                  display_name: str = Form(""), bio: str = Form("")):
+async def save_settings(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user),
+                        display_name: str = Form(""), bio: str = Form(""), avatar: UploadFile = File(None)):
     user.display_name = display_name.strip()[:80] or user.handle
     user.bio = bio.strip()[:280]
+    avatar_url = await _save_image(avatar)
+    if avatar_url:
+        user.avatar_url = avatar_url
     db.commit()
     return RedirectResponse(f"/social/u/{user.handle}", status_code=303)
+
+
+@router.post("/posts/{post_id}/delete")
+def delete_post(post_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    post = db.get(Post, post_id)
+    if post and post.author_id == user.id:
+        db.delete(post); db.commit()
+    return {"ok": True}
+
+
+@router.get("/p/{post_id}/edit", response_class=HTMLResponse)
+def edit_post_page(post_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    post = db.get(Post, post_id)
+    if not post or post.author_id != user.id:
+        return HTMLResponse(layout("Edit", "<h1>Can't edit that post</h1>", user), status_code=403)
+    body = (f'<h1>Edit post</h1><div class="card"><form method="post" action="/social/p/{post_id}/edit">'
+            f'<textarea name="body" maxlength="2000">{esc(post.body)}</textarea>'
+            f'<button class="btn" type="submit">Save</button> '
+            f'<a href="/social/p/{post_id}" class="btn ghost" style="margin-left:8px">Cancel</a></form></div>')
+    return HTMLResponse(layout("Edit post", body, user, "feed"))
+
+
+@router.post("/p/{post_id}/edit")
+def edit_post(post_id: int, request: Request, db: Session = Depends(get_db), body: str = Form(""), user: User = Depends(current_user)):
+    post = db.get(Post, post_id)
+    if post and post.author_id == user.id:
+        post.body = (body or "").strip()[:2000]
+        db.commit()
+    return RedirectResponse(f"/social/p/{post_id}", status_code=303)
+
+
+@router.get("/people", response_class=HTMLResponse)
+def people(request: Request, db: Session = Depends(get_db), q: str = ""):
+    viewer = optional_user(request, db)
+    query = select(User)
+    term = (q or "").strip()
+    if term:
+        like = f"%{term.lower()}%"
+        query = query.where(func.lower(User.handle).like(like) | func.lower(User.display_name).like(like))
+    if viewer:
+        query = query.where(User.id != viewer.id)
+    users = db.scalars(query.order_by(User.created_at.desc()).limit(50)).all()
+    following = set()
+    if viewer:
+        following = set(db.scalars(select(Follow.followee_id).where(Follow.follower_id == viewer.id)).all())
+    cards = ""
+    for u in users:
+        pro = '<span class="pro" style="margin-left:6px">' + ("PRO") + '</span>' if u.is_pro else ""
+        if viewer and u.id in following:
+            act = f'<form method="post" action="/social/unfollow/{esc(u.handle)}" style="margin-left:auto"><button class="btn ghost" type="submit">Following</button></form>'
+        elif viewer:
+            act = f'<form method="post" action="/social/follow/{esc(u.handle)}" style="margin-left:auto"><button class="btn" type="submit">Follow</button></form>'
+        else:
+            act = ''
+        cards += (f'<div class="card" style="margin-top:10px"><div class="row">{avatar_html(u)}'
+                  f'<div><a href="/social/u/{esc(u.handle)}" style="font-size:14px;font-weight:500">{esc(u.display_name or u.handle)}{pro}</a>'
+                  f'<div class="handle">@{esc(u.handle)}</div></div>{act}</div>'
+                  + (f'<p class="muted" style="margin:8px 0 0">{esc(u.bio)}</p>' if u.bio else '') + '</div>')
+    search = (f'<form method="get" action="/social/people"><input name="q" placeholder="Search people…" value="{esc(term)}">'
+              f'<button class="btn" type="submit">Search</button></form>')
+    body = '<h1>People</h1><p class="lede">Find creators to follow.</p><div class="card">' + search + '</div>' + (cards or '<p class="muted" style="margin-top:14px">No matches.</p>')
+    return HTMLResponse(layout("People", body, viewer, "people"))
 
 

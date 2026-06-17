@@ -47,9 +47,16 @@ textarea{resize:vertical;min-height:70px;font-family:inherit}
 """
 
 
+def avatar_html(user, cls: str = "avatar") -> str:
+    """Either the user's uploaded avatar image or the gradient placeholder."""
+    if user is not None and getattr(user, "avatar_url", None):
+        return f'<img class="{cls}" src="{html.escape(user.avatar_url)}" alt="" style="object-fit:cover">'
+    return f'<span class="{cls}"></span>'
+
+
 def layout(title: str, body: str, user: User | None = None, active: str = "") -> str:
     nav_items = [("feed", "/social", "Feed"), ("rooms", "/social/rooms", "Rooms"),
-                 ("inbox", "/social/inbox", "Inbox")]
+                 ("inbox", "/social/inbox", "Inbox"), ("people", "/social/people", "People")]
     if user:
         from . import entitlements as _ent
         nav_items.append(("billing", "/social/billing", "Plans"))
@@ -68,7 +75,7 @@ def layout(title: str, body: str, user: User | None = None, active: str = "") ->
             bell = f'<a href="/social/notifications" class="tag" title="Notifications">◉{count}</a>'
         except Exception:
             bell = ""
-        right = bell + badge + f'<a href="/social/logout" class="tag">LOGOUT</a><span class="avatar"></span>'
+        right = bell + badge + f'<a href="/social/logout" class="tag">LOGOUT</a>' + avatar_html(user)
     else:
         right = '<a href="/social/login" class="tag">LOGIN</a><a href="/social/register" class="pro">JOIN</a>'
     nav = "".join(
