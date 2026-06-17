@@ -1,8 +1,10 @@
 # CPU-only PyTorch wheels — the free Space has no GPU, and the default CUDA
-# build of torch is ~2.5 GB and blows the build. The +cpu wheels are small.
+# build of torch is ~2.5 GB and blows the build. 2.2.2 is the oldest +cpu wheel
+# still published on the index, and its torchaudio still has the built-in audio
+# loader (newer torchaudio offloads to torchcodec, which the Space doesn't have).
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.1.2+cpu
-torchaudio==2.1.2+cpu
+torch==2.2.2+cpu
+torchaudio==2.2.2+cpu
 # Demucs separator + audio I/O + the Gradio UI/API.
 demucs==4.0.1
 soundfile>=0.12
