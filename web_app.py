@@ -519,6 +519,14 @@ HTML = """
                 <option value="ai_stems">AI stem spatial mix — vocals/drums/bass/instruments</option>
               </select>
             </div>
+            <div class="field">
+              <label for="fmt">Export format</label>
+              <select id="fmt">
+                <option value="wav" selected>WAV — 32-bit float (studio)</option>
+                <option value="mp3">MP3 — 320 kbps (share)</option>
+                <option value="flac">FLAC — lossless compressed</option>
+              </select>
+            </div>
             <button class="launch" onclick="document.getElementById('file').click()">Select track</button>
           </div>
           <div class="prompt-box">
@@ -580,6 +588,7 @@ const bar = document.getElementById('bar');
 const preset = document.getElementById('preset');
 const stemMode = document.getElementById('stemMode');
 const mixPrompt = document.getElementById('mixPrompt');
+const fmtSel = document.getElementById('fmt');
 
 // ── Direct API routing ────────────────────────────────────────────────────────
 // Uploads and downloads go straight to Railway, skipping the Vercel proxy.
@@ -640,6 +649,7 @@ async function upload(f) {
   data.append('preset', preset.value);
   data.append('stem_mode', stemMode.value);
   data.append('mix_prompt', mixPrompt.value.trim());
+  data.append('fmt', fmtSel ? fmtSel.value : 'wav');
   try {
     const json = await xhrUpload(`${API}/convert`, data, pct => {
       statusEl.textContent = `Uploading: ${pct}% of ${mb} MB`;
@@ -875,7 +885,25 @@ def _separate_stems_hf_space(src: Path, work_dir: Path):
     return stems
 
 
-def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = "", stem_mode: str = "classic"):
+def _convert_format(wav_path: Path, fmt: str) -> Path:
+    """Convert the rendered WAV to mp3/flac with ffmpeg; return the delivered file.
+    Falls back to the WAV if conversion isn't possible."""
+    if fmt not in ("mp3", "flac"):
+        return wav_path
+    try:
+        from eightd_engine.audio_io import _find_ffmpeg
+        import subprocess
+        ff = _find_ffmpeg()
+        dest = wav_path.with_name(wav_path.stem + ("." + fmt))
+        codec = ["-codec:a", "libmp3lame", "-b:a", "320k"] if fmt == "mp3" else ["-codec:a", "flac"]
+        subprocess.run([ff, "-y", "-hide_banner", "-loglevel", "error", "-i", str(wav_path), *codec, str(dest)], check=True)
+        return dest
+    except Exception as exc:
+        print(f"[8D] format conversion to {fmt} failed, serving WAV: {exc}", flush=True)
+        return wav_path
+
+
+def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_luxe", mix_prompt: str = "", stem_mode: str = "classic", fmt: str = "wav"):
     import time as _time
     _t0 = _time.time()
     def _log(msg: str) -> None:
@@ -1042,13 +1070,14 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                 felt_presence=settings["felt_presence"],
             )
             _log("render_8d_to_wav complete")
-        _set_job(job_id, message="Writing WAV export…")
+        _set_job(job_id, message=f"Writing {fmt.upper()} export…")
+        deliver = _convert_format(out, fmt)
         _set_job(
             job_id,
             status="complete",
             message="Done.",
-            output_name=out.name,
-            download_url=f"/files/{out.name}",
+            output_name=deliver.name,
+            download_url=f"/files/{deliver.name}",
             bpm=round(bpm, 1),
             rotation_cpm=round(rotation_cpm, 2),
             correlation=round(report.correlation, 3),
@@ -1115,7 +1144,8 @@ async def health():
 
 
 @app.post("/convert")
-async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe"), mix_prompt: str = Form(""), stem_mode: str = Form("classic")):
+async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe"), mix_prompt: str = Form(""), stem_mode: str = Form("classic"), fmt: str = Form("wav")):
+    fmt = fmt.lower() if fmt.lower() in ("wav", "mp3", "flac") else "wav"
     if not DSP_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -1143,7 +1173,7 @@ async def convert(file: UploadFile = File(...), preset: str = Form("reference_lu
                 )
             f.write(chunk)
     _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name, mix_prompt=mix_prompt, stem_mode=stem_mode)
-    EXECUTOR.submit(_process_job, job_id, src, out, preset, mix_prompt, stem_mode)
+    EXECUTOR.submit(_process_job, job_id, src, out, preset, mix_prompt, stem_mode, fmt)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing", "message": "Upload accepted. DSP render started."})
 
 @app.get("/jobs/{job_id}")
