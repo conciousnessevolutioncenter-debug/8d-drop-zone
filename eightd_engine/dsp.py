@@ -129,14 +129,17 @@ def analyze_correlation(samples: np.ndarray) -> CorrelationReport:
     """
 
     stereo = ensure_stereo_float(samples)
-    left = stereo[:, 0]
-    right = stereo[:, 1]
-    if len(stereo) == 0 or rms_level(left) < 1e-12 or rms_level(right) < 1e-12:
+    left = stereo[:, 0].astype(np.float64)
+    right = stereo[:, 1].astype(np.float64)
+    # Audio phase-correlation meter: the normalized dot product (cosine
+    # similarity), NOT Pearson. +1 = identical/mono, 0 = decorrelated, -1 =
+    # anti-phase (mono cancellation). This is well-defined for DC/constant
+    # signals too, where Pearson divides by zero.
+    denom = float(np.sqrt(np.sum(left * left) * np.sum(right * right)))
+    if len(stereo) == 0 or denom < 1e-18:
         corr = 1.0
     else:
-        corr = float(np.corrcoef(left, right)[0, 1])
-        if not np.isfinite(corr):
-            corr = 1.0
+        corr = float(np.clip(np.sum(left * right) / denom, -1.0, 1.0))
     mid = (left + right) * 0.5
     side = (left - right) * 0.5
     ratio = rms_level(side) / (rms_level(mid) + 1e-12)
@@ -1277,16 +1280,12 @@ def _stream_render_to_wav(read_segment, n, sr, ref_rms, out_path, on_progress, y
             final.write(blk * g32 if gain != 1.0 else blk)
     tmp_path.unlink(missing_ok=True)
 
-    nf = max(1, count // 2)
-    var_l = s_ll / nf - (s_l / nf) ** 2
-    var_r = s_rr / nf - (s_r / nf) ** 2
-    cov = s_lr / nf - (s_l / nf) * (s_r / nf)
-    if var_l < 1e-24 or var_r < 1e-24:
+    # Phase-meter correlation: normalized dot product (matches analyze_correlation).
+    denom = np.sqrt(s_ll * s_rr)
+    if denom < 1e-18:
         corr = 1.0
     else:
-        corr = float(cov / np.sqrt(var_l * var_r))
-        if not np.isfinite(corr):
-            corr = 1.0
+        corr = float(np.clip(s_lr / denom, -1.0, 1.0))
     rms_side = np.sqrt(s_ss / nf + 1e-18)
     rms_mid = np.sqrt(s_mm / nf + 1e-18)
     ratio = float(rms_side / (rms_mid + 1e-12))

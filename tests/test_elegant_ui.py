@@ -20,7 +20,7 @@ def test_ui_uses_premium_product_language_not_test_wrapper_copy():
     assert "Spatial Audio Mastering" in html
     assert "Browser test wrapper" not in html
     assert "Drop Audio Here" not in html
-    assert "Select Track" in html
+    assert "Select track" in html
 
 
 def test_ui_exposes_reference_luxe_preset_and_signal_chain_badges():
@@ -45,7 +45,7 @@ def test_ui_exposes_chat_prompt_for_spatial_refinement():
     module = load_live_module()
     html = module.HTML
 
-    assert "Mix instruction chat" in html
+    assert "Mix command console" in html
     assert 'id="mixPrompt"' in html
-    assert "Keep the vocal front-center" in html
+    assert "keep the vocal front-center" in html
     assert "data.append('mix_prompt'" in html
