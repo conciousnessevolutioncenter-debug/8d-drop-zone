@@ -1281,6 +1281,7 @@ def _stream_render_to_wav(read_segment, n, sr, ref_rms, out_path, on_progress, y
     tmp_path.unlink(missing_ok=True)
 
     # Phase-meter correlation: normalized dot product (matches analyze_correlation).
+    nf = max(1, count // 2)  # frame count (count tallies both channels)
     denom = np.sqrt(s_ll * s_rr)
     if denom < 1e-18:
         corr = 1.0
