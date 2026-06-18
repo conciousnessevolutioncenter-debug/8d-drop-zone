@@ -2,6 +2,7 @@
 mounted under /social so the audio app routes are untouched."""
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 import uuid
@@ -25,7 +26,9 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Post-image storage. Dev: a temp dir served by the route below. Prod: point at a
 # persistent volume or swap to S3/R2 (the container's temp dir is ephemeral).
-MEDIA_DIR = Path(tempfile.gettempdir()) / "8d_social_media"
+# Persistent in prod: set SOCIAL_MEDIA_DIR to a mounted volume path (the temp
+# dir is wiped on redeploy). Dev falls back to a temp folder.
+MEDIA_DIR = Path(os.environ.get("SOCIAL_MEDIA_DIR") or (Path(tempfile.gettempdir()) / "8d_social_media"))
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 # content-type -> extension, plus an extension allowlist for fallback when the
 # browser sends a generic content-type (e.g. application/octet-stream).
