@@ -27,6 +27,7 @@ class User(Base):
     is_pro = Column(Boolean, nullable=False, default=False)   # derived: tier != free
     tier = Column(String(20), nullable=False, default="free")  # free | creator | producer | studio
     credits = Column(Integer, nullable=False, default=0)
+    email_verified = Column(Boolean, nullable=False, default=False)
     stripe_customer_id = Column(String(80), nullable=True)  # reserved for payments phase
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 

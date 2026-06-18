@@ -88,6 +88,29 @@ try:
     app.include_router(social_rt_router)
     app.include_router(social_billing_router)
     _social_init_db()
+
+    # CSRF defense: reject cross-origin state-changing requests to /social.
+    # (Belt-and-suspenders with SameSite=lax cookies.) The Stripe webhook is
+    # server-to-server with no Origin and is signature-verified, so it's exempt.
+    from urllib.parse import urlparse as _urlparse
+    _ALLOWED_HOSTS = {h for h in [
+        os.environ.get("PUBLIC_WS_BASE", ""),
+        "8d-drop-zone.vercel.app",
+        "luminous-endurance-production-0696.up.railway.app",
+    ] if h}
+
+    @app.middleware("http")
+    async def _csrf_origin_guard(request, call_next):
+        if (request.method in ("POST", "PUT", "PATCH", "DELETE")
+                and request.url.path.startswith("/social")
+                and request.url.path != "/social/stripe/webhook"):
+            origin = request.headers.get("origin")
+            if origin:
+                oh = _urlparse(origin).netloc
+                allowed = {request.url.netloc} | _ALLOWED_HOSTS
+                if oh and oh not in allowed:
+                    return JSONResponse({"detail": "Cross-origin request blocked."}, status_code=403)
+        return await call_next(request)
     SOCIAL_AVAILABLE = True
     print("[social] enabled at /social", flush=True)
 except Exception as _social_err:  # pragma: no cover - keeps audio app alive

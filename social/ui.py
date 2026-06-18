@@ -82,6 +82,11 @@ def layout(title: str, body: str, user: User | None = None, active: str = "") ->
         f'<a href="{href}" class="{"active" if key == active else ""}">{label}</a>'
         for key, href, label in nav_items
     )
+    verify_banner = ""
+    if user is not None and not getattr(user, "email_verified", True):
+        verify_banner = ('<div class="card" style="border-color:rgba(98,224,255,.3);background:rgba(98,224,255,.06);margin-top:12px;padding:10px 14px">'
+                         '<span class="muted">Please verify your email to secure your account. </span>'
+                         '<a href="/social/verify/resend" style="color:var(--cyan)">Resend link</a></div>')
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)} · 8D Engine</title><style>{CSS}</style></head><body>
@@ -92,6 +97,7 @@ def layout(title: str, body: str, user: User | None = None, active: str = "") ->
     <nav class="nav">{nav}</nav>
     <span class="row">{right}</span>
   </div>
+  {verify_banner}
   {body}
 </div></body></html>"""
 

@@ -14,21 +14,32 @@ from email.message import EmailMessage
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 _RESET_SALT = "8d-password-reset"
+_VERIFY_SALT = "8d-email-verify"
 
 
-def _serializer() -> URLSafeTimedSerializer:
+def _serializer(salt: str) -> URLSafeTimedSerializer:
     secret = os.environ.get("SESSION_SECRET", "dev-insecure-change-me")
-    return URLSafeTimedSerializer(secret, salt=_RESET_SALT)
+    return URLSafeTimedSerializer(secret, salt=salt)
 
 
 def make_reset_token(user_id: int) -> str:
-    return _serializer().dumps({"uid": int(user_id)})
+    return _serializer(_RESET_SALT).dumps({"uid": int(user_id)})
 
 
 def read_reset_token(token: str, max_age_seconds: int = 3600) -> int | None:
     try:
-        data = _serializer().loads(token, max_age=max_age_seconds)
-        return int(data["uid"])
+        return int(_serializer(_RESET_SALT).loads(token, max_age=max_age_seconds)["uid"])
+    except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
+        return None
+
+
+def make_verify_token(user_id: int) -> str:
+    return _serializer(_VERIFY_SALT).dumps({"uid": int(user_id)})
+
+
+def read_verify_token(token: str, max_age_seconds: int = 7 * 24 * 3600) -> int | None:
+    try:
+        return int(_serializer(_VERIFY_SALT).loads(token, max_age=max_age_seconds)["uid"])
     except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
         return None
 

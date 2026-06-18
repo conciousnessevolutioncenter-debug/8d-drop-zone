@@ -18,7 +18,9 @@ from .models import User, Post, Like, Follow, Comment, Notification
 from .security import hash_password, verify_password, login_session, logout_session, optional_user, current_user
 from .ui import layout, esc, avatar_html
 from .notify import create_notification
-from .mailer import make_reset_token, read_reset_token, send_email, smtp_configured
+from .mailer import (make_reset_token, read_reset_token, send_email, smtp_configured,
+                     make_verify_token, read_verify_token)
+from .ratelimit import rate_limit
 
 router = APIRouter(prefix="/social", tags=["social"])
 _HANDLE_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -140,6 +142,7 @@ def register_page(request: Request, db: Session = Depends(get_db)):
 def register(request: Request, db: Session = Depends(get_db),
              display_name: str = Form(...), handle: str = Form(...),
              email: str = Form(...), password: str = Form(...)):
+    rate_limit(request, "register", 6, 300)
     handle = handle.strip().lower(); email = email.strip().lower()
     err = None
     if not _HANDLE_RE.match(handle): err = "Handle must be 3–30 chars: a–z, 0–9, underscore."
@@ -154,7 +157,36 @@ def register(request: Request, db: Session = Depends(get_db),
     user = User(email=email, handle=handle, display_name=display_name.strip() or handle,
                 password_hash=hash_password(password))
     db.add(user); db.commit(); db.refresh(user)
+    # Send a verification link (logged if SMTP unset). Soft gate: we don't block
+    # login, just nudge with a banner until verified.
+    token = make_verify_token(user.id)
+    link = f"{str(request.base_url).rstrip('/')}/social/verify/{token}"
+    send_email(user.email, "Verify your 8D Engine email",
+               f"Welcome! Confirm your email to finish setting up your account:\n\n{link}")
     login_session(request, user)
+    return RedirectResponse("/social", status_code=303)
+
+
+@router.get("/verify/{token}", response_class=HTMLResponse)
+def verify_email(token: str, request: Request, db: Session = Depends(get_db)):
+    uid = read_verify_token(token)
+    viewer = optional_user(request, db)
+    if uid is None:
+        return HTMLResponse(layout("Verify", '<h1>Link expired</h1><p class="lede">That verification link is invalid or has expired.</p><a href="/social/verify/resend" class="btn">Resend</a>', viewer), status_code=400)
+    u = db.get(User, uid)
+    if u and not u.email_verified:
+        u.email_verified = True
+        db.commit()
+    return HTMLResponse(layout("Verified", '<h1>Email verified ✓</h1><p class="lede">Thanks — your account is confirmed.</p><a href="/social" class="btn">Go to feed</a>', viewer), status_code=200)
+
+
+@router.get("/verify/resend")
+def verify_resend(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rate_limit(request, "verify_resend", 4, 600)
+    if not user.email_verified:
+        token = make_verify_token(user.id)
+        link = f"{str(request.base_url).rstrip('/')}/social/verify/{token}"
+        send_email(user.email, "Verify your 8D Engine email", f"Confirm your email:\n\n{link}")
     return RedirectResponse("/social", status_code=303)
 
 
@@ -174,6 +206,7 @@ def login_page(request: Request, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(request: Request, db: Session = Depends(get_db),
           email: str = Form(...), password: str = Form(...)):
+    rate_limit(request, "login", 10, 300)
     user = db.scalar(select(User).where(User.email == email.strip().lower()))
     if not user or not verify_password(password, user.password_hash):
         body = '<h1>Sign in</h1><div class="card"><p class="err">Wrong email or password.</p>' \
@@ -201,6 +234,7 @@ def reset_request_page(request: Request):
 
 @router.post("/reset-request", response_class=HTMLResponse)
 def reset_request(request: Request, db: Session = Depends(get_db), email: str = Form(...)):
+    rate_limit(request, "reset", 5, 600)
     user = db.scalar(select(User).where(User.email == email.strip().lower()))
     if user:
         token = make_reset_token(user.id)
@@ -268,6 +302,7 @@ async def create_post(request: Request, db: Session = Depends(get_db),
                       body: str = Form(""), track_job_id: str = Form(None),
                       image: UploadFile = File(None),
                       user: User = Depends(current_user)):
+    rate_limit(request, "post", 20, 60)
     text = (body or "").strip()
     image_provided = bool(image and image.filename)
     image_url = await _save_image(image)
