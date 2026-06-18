@@ -452,6 +452,7 @@ HTML = """
       <a class="brand" href="/" aria-label="The 8D Engine home"><span class="mark">◌</span><span class="word">THE&nbsp;8D&nbsp;ENGINE</span></a>
       <div class="nav-right">
         <span class="sys"><span class="pulse"></span> All systems nominal</span>
+        <a href="/mixer" style="font-family:var(--mono,monospace);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9fb0c8;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:8px 15px;text-decoration:none">Multitrack mixer</a>
         <a href="/social" style="font-family:var(--mono,monospace);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#06101c;background:linear-gradient(135deg,#62e0ff,#9d8bff);border-radius:999px;padding:8px 15px;text-decoration:none">Community / Sign in</a>
       </div>
     </nav>
@@ -1260,3 +1261,436 @@ async def job_status(job_id: str):
         if not job:
             raise HTTPException(status_code=404, detail="Unknown render job")
         return dict(job, job_id=job_id)
+
+
+# ── Multitrack mixer ───────────────────────────────────────────────────────────
+# Separates a track into stems and serves each one individually so the browser
+# can load them into a per-stem Web Audio mixer (fader/pan/EQ/mute/solo).
+
+def _separate_stems_any(src: Path, stem_dir: Path, set_msg=None):
+    """Separate into stems with the first available engine
+    (HF Space → Replicate → local Demucs). Returns ``{name: StemData}`` or
+    raises :class:`StemSeparationUnavailable` when none are configured/working.
+    """
+    def msg(m):
+        if set_msg:
+            set_msg(m)
+    if os.environ.get("HF_SPACE_ID"):
+        msg("Separating stems on the free Demucs cloud (first run may take a minute)…")
+        return _separate_stems_hf_space(src, stem_dir)
+    if os.environ.get("REPLICATE_API_TOKEN"):
+        msg("Separating stems with hosted AI (Replicate)…")
+        return _separate_stems_replicate(src, stem_dir)
+    mode_info = available_stem_mode()
+    if mode_info.get("mode") != "demucs":
+        raise StemSeparationUnavailable(mode_info.get("message", "AI stem separation is unavailable on this server"))
+    msg("Separating vocals, drums, bass, and instruments with AI…")
+    return separate_stems_from_file(src, work_dir=stem_dir)
+
+
+def _process_mixer_job(job_id: str, src: Path):
+    import traceback
+    try:
+        _set_job(job_id, status="processing", message="Separating stems for the mixer…")
+        stem_dir = APP_DIR / f"{job_id}_mixstems"
+        stem_dir.mkdir(parents=True, exist_ok=True)
+        stems = _separate_stems_any(src, stem_dir, lambda m: _set_job(job_id, message=m))
+        # Preferred display order; anything else trails alphabetically.
+        order = {"vocals": 0, "drums": 1, "bass": 2, "other": 3, "guitar": 4, "piano": 5}
+        out_stems = []
+        for name in sorted(stems, key=lambda n: (order.get(n.lower(), 99), n)):
+            sd = stems[name]
+            safe = "".join(c for c in name if c.isalnum() or c in "-_").lower() or "stem"
+            fn = f"{job_id}_stem_{safe}.wav"
+            _sf.write(str(APP_DIR / fn), sd.samples, int(sd.sample_rate))
+            out_stems.append({"name": name, "url": f"/files/{fn}"})
+        _set_job(job_id, status="complete", message=f"Separated {len(out_stems)} stems.", stems=out_stems, stem_count=len(out_stems))
+    except StemSeparationUnavailable as exc:
+        _set_job(job_id, status="failed", message="Stem separation isn't available on this server.", error=str(exc))
+    except Exception as exc:  # pragma: no cover - env-specific
+        traceback.print_exc()
+        _set_job(job_id, status="failed", message="Stem separation failed.", error=str(exc))
+    finally:
+        src.unlink(missing_ok=True)
+
+
+@app.post("/mixer/separate")
+async def mixer_separate(file: UploadFile = File(...)):
+    if not DSP_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Stem separation needs the long-lived server; run the app locally or on Railway.")
+    suffix = Path(file.filename or "audio").suffix.lower() or ".audio"
+    safe_stem = Path(file.filename or "audio").stem.replace("/", "_").replace("\\", "_")[:80]
+    job_id = uuid.uuid4().hex[:12]
+    src = APP_DIR / f"{safe_stem}_{job_id}_mixin{suffix}"
+    total = 0
+    with src.open("wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                f.close()
+                src.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"File is too large. Please upload tracks {MAX_UPLOAD_MB} MB or smaller.")
+            f.write(chunk)
+    _set_job(job_id, status="queued", message="Upload complete. Waiting for the stem worker…", input_name=file.filename)
+    EXECUTOR.submit(_process_mixer_job, job_id, src)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing"})
+
+
+@app.get("/mixer", response_class=HTMLResponse)
+def mixer_page():
+    return MIXER_HTML
+
+
+MIXER_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Multitrack Mixer · The 8D Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{ --bg:#06101c; --panel:rgba(13,20,38,.55); --hair:rgba(255,255,255,.12); --hair2:rgba(255,255,255,.22);
+    --cyan:#62e0ff; --violet:#9d8bff; --soft:#8a93a8; --text:#e7edf6;
+    --mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --display:'Space Grotesk', system-ui, sans-serif; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:radial-gradient(1200px 700px at 70% -10%, #11203c 0%, #06101c 55%, #050a14 100%);
+    color:var(--text); font-family:Inter, system-ui, -apple-system, Segoe UI, sans-serif; min-height:100vh; }
+  a{ color:inherit; }
+  .shell{ max-width:1280px; margin:0 auto; padding:22px 22px 80px; }
+  nav{ display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; }
+  .brand{ display:flex; align-items:center; gap:10px; text-decoration:none; }
+  .brand .mark{ color:var(--cyan); font-size:20px; }
+  .brand .word{ font-family:var(--display); font-weight:700; letter-spacing:.16em; font-size:13px; }
+  .navbtn{ font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:#9fb0c8; border:1px solid var(--hair2); border-radius:999px; padding:8px 15px; text-decoration:none; }
+  h1{ font-family:var(--display); font-weight:700; font-size:30px; margin:0 0 6px; letter-spacing:-.01em; }
+  .lede{ color:var(--soft); max-width:680px; margin:0 0 24px; line-height:1.5; font-size:14px; }
+  .grad{ background:linear-gradient(135deg,var(--cyan),var(--violet)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .card{ border:1px solid var(--hair); border-radius:18px; background:var(--panel); padding:22px; }
+  .drop{ border:1.5px dashed var(--hair2); border-radius:16px; padding:34px; text-align:center; cursor:pointer; transition:border-color .2s, background .2s; }
+  .drop:hover, .drop.drag{ border-color:var(--cyan); background:rgba(98,224,255,.05); }
+  .drop h3{ font-family:var(--display); margin:8px 0 4px; font-size:16px; }
+  .drop p{ color:var(--soft); font-size:12.5px; margin:0; }
+  .btn{ cursor:pointer; border:none; border-radius:999px; padding:10px 18px; font-family:var(--mono);
+    font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#06101c;
+    background:linear-gradient(135deg,var(--cyan),var(--violet)); }
+  .btn.ghost{ background:transparent; color:#9fb0c8; border:1px solid var(--hair2); }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  #status{ margin-top:14px; color:var(--soft); font-size:12.5px; font-family:var(--mono); min-height:18px; }
+  #status.err{ color:#ff8a8a; }
+  /* transport */
+  .transport{ display:none; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:18px; }
+  .play{ width:46px; height:46px; border-radius:50%; border:none; cursor:pointer; font-size:17px; color:#06101c;
+    background:linear-gradient(135deg,var(--cyan),var(--violet)); }
+  .tcode{ font-family:var(--mono); font-size:13px; color:#9fb0c8; min-width:96px; }
+  .master{ display:flex; align-items:center; gap:8px; margin-left:auto; }
+  .master label{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--soft); }
+  /* mixer */
+  #mixer{ display:none; gap:14px; overflow-x:auto; padding-bottom:8px; }
+  .strip{ flex:0 0 150px; border:1px solid var(--hair); border-radius:16px; background:linear-gradient(180deg,rgba(13,20,38,.6),rgba(7,11,22,.4));
+    padding:14px 12px; display:flex; flex-direction:column; align-items:center; gap:10px; }
+  .strip .name{ font-family:var(--display); font-weight:600; font-size:13px; text-transform:capitalize; }
+  .meter{ width:100%; height:8px; border-radius:6px; background:rgba(255,255,255,.07); overflow:hidden; }
+  .meter > i{ display:block; height:100%; width:0%; background:linear-gradient(90deg,#36d399,#e3d24a 70%,#ff6b6b); transition:width .05s linear; }
+  .eq{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; width:100%; }
+  .eq .knob{ display:flex; flex-direction:column; align-items:center; gap:3px; }
+  .eq .knob span{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em; color:var(--soft); }
+  .eq input{ width:100%; }
+  .panrow{ width:100%; display:flex; flex-direction:column; align-items:center; gap:3px; }
+  .panrow span{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em; color:var(--soft); }
+  .fader{ -webkit-appearance:slider-vertical; writing-mode:vertical-lr; direction:rtl; width:30px; height:130px; }
+  .gaindb{ font-family:var(--mono); font-size:10px; color:#9fb0c8; }
+  .ms{ display:flex; gap:6px; }
+  .ms button{ cursor:pointer; width:30px; height:26px; border-radius:7px; border:1px solid var(--hair2);
+    background:transparent; color:var(--soft); font-family:var(--mono); font-size:11px; font-weight:600; }
+  .ms button.on.m{ background:#ff6b6b; color:#160606; border-color:transparent; }
+  .ms button.on.s{ background:var(--cyan); color:#06101c; border-color:transparent; }
+  input[type=range]{ accent-color:var(--cyan); }
+  .actions{ display:none; gap:12px; margin-top:20px; flex-wrap:wrap; }
+  .hint{ color:var(--soft); font-size:12px; margin-top:10px; }
+  .result{ margin-top:14px; font-size:13px; }
+  .result a{ color:var(--cyan); }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <nav>
+      <a class="brand" href="/"><span class="mark">&#9676;</span><span class="word">THE&nbsp;8D&nbsp;ENGINE</span></a>
+      <a class="navbtn" href="/">&larr; Back to mastering</a>
+    </nav>
+
+    <h1>Multitrack <span class="grad">mixer</span></h1>
+    <p class="lede">Drop a finished track and the engine splits it into vocals, drums, bass and instruments. Balance each
+      stem with its own fader, pan, 3-band EQ and mute/solo &mdash; then bounce a fresh mixdown or send it straight into the 8D orbit.</p>
+
+    <div class="card" id="uploadCard">
+      <div class="drop" id="drop">
+        <div style="font-size:26px">&#127899;</div>
+        <h3>Drop a track to un-mix</h3>
+        <p>WAV, MP3, FLAC, M4A &mdash; up to 200 MB. We separate the stems on the server, then mix in your browser.</p>
+        <input type="file" id="file" accept="audio/*" style="display:none"/>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <div class="transport" id="transport">
+      <button class="play" id="play" title="Play / pause">&#9658;</button>
+      <button class="btn ghost" id="stop">Stop</button>
+      <span class="tcode" id="tcode">0:00 / 0:00</span>
+      <div class="master">
+        <label>Master</label>
+        <input type="range" id="masterFader" min="0" max="1.4" step="0.01" value="1"/>
+      </div>
+    </div>
+
+    <div id="mixer"></div>
+
+    <div class="actions" id="actions">
+      <button class="btn" id="mixdown">&#11015; Download mixdown (WAV)</button>
+      <button class="btn ghost" id="to8d">Send mix to the 8D engine &rarr;</button>
+    </div>
+    <div class="result" id="result"></div>
+  </div>
+
+<script>
+const API = location.origin;
+const $ = id => document.getElementById(id);
+const drop = $('drop'), fileIn = $('file'), statusEl = $('status');
+let ctx = null, channels = [], duration = 0;
+let playing = false, startedAt = 0, offset = 0, sources = [], rafId = 0, meterRaf = 0;
+
+function setStatus(msg, err){ statusEl.textContent = msg || ''; statusEl.classList.toggle('err', !!err); }
+const fmt = s => { s = Math.max(0, s|0); return (s/60|0)+':'+String(s%60).padStart(2,'0'); };
+
+drop.onclick = () => fileIn.click();
+['dragover','dragenter'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', ev => { if (ev.dataTransfer.files[0]) separate(ev.dataTransfer.files[0]); });
+fileIn.onchange = () => { if (fileIn.files[0]) separate(fileIn.files[0]); };
+
+async function separate(file){
+  setStatus('Uploading ' + file.name + ' ...');
+  const fd = new FormData(); fd.append('file', file);
+  let res;
+  try { res = await fetch(API + '/mixer/separate', { method:'POST', body:fd }); }
+  catch(e){ return setStatus('Upload failed: ' + e.message, true); }
+  if (!res.ok){ const t = await res.text(); return setStatus('Server error: ' + t, true); }
+  const { job_id } = await res.json();
+  setStatus('Separating stems... this can take a minute on the free cloud worker.');
+  pollSeparation(job_id);
+}
+
+async function pollSeparation(jobId){
+  for (let i=0;i<600;i++){
+    let job;
+    try { job = await (await fetch(API + '/jobs/' + jobId)).json(); } catch(e){ await wait(2000); continue; }
+    if (job.message) setStatus(job.message);
+    if (job.status === 'complete'){ await loadStems(job.stems || []); return; }
+    if (job.status === 'failed'){ return setStatus(job.message + ' ' + (job.error||''), true); }
+    await wait(2000);
+  }
+  setStatus('Timed out waiting for stem separation.', true);
+}
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+async function loadStems(stems){
+  if (!stems.length) return setStatus('No stems were returned.', true);
+  setStatus('Loading ' + stems.length + ' stems into the mixer...');
+  ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
+  const decoded = [];
+  for (const st of stems){
+    try {
+      const ab = await (await fetch(st.url.startsWith('http') ? st.url : API + st.url)).arrayBuffer();
+      decoded.push({ name: st.name, buffer: await ctx.decodeAudioData(ab) });
+    } catch(e){ /* skip a bad stem rather than abort the whole mix */ }
+  }
+  if (!decoded.length) return setStatus('Could not decode the separated stems.', true);
+  buildMixer(decoded);
+  setStatus('');
+  $('uploadCard').style.display = 'none';
+}
+
+// buildMixer is global so it can be driven with synthetic buffers in tests.
+function buildMixer(decoded){
+  ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
+  const mixerEl = $('mixer'); mixerEl.innerHTML = ''; channels = [];
+  const masterGain = ctx.createGain();
+  masterGain.gain.value = parseFloat($('masterFader').value);
+  masterGain.connect(ctx.destination);
+  $('masterFader').oninput = e => { masterGain.gain.value = parseFloat(e.target.value); };
+  duration = Math.max.apply(null, decoded.map(d => d.buffer.duration));
+
+  decoded.forEach(d => {
+    const ch = { name:d.name, buffer:d.buffer, vol:1, pan:0, mute:false, solo:false, eq:{lo:0,mid:0,hi:0} };
+    // persistent node chain: src -> lo -> mid -> hi -> pan -> gain -> analyser -> master
+    ch.lo = ctx.createBiquadFilter(); ch.lo.type='lowshelf'; ch.lo.frequency.value=200;
+    ch.mid = ctx.createBiquadFilter(); ch.mid.type='peaking'; ch.mid.frequency.value=1000; ch.mid.Q.value=1;
+    ch.hi = ctx.createBiquadFilter(); ch.hi.type='highshelf'; ch.hi.frequency.value=4000;
+    ch.panner = ctx.createStereoPanner();
+    ch.gain = ctx.createGain();
+    ch.analyser = ctx.createAnalyser(); ch.analyser.fftSize = 256;
+    ch.lo.connect(ch.mid).connect(ch.hi).connect(ch.panner).connect(ch.gain).connect(ch.analyser).connect(masterGain);
+
+    const el = document.createElement('div'); el.className = 'strip';
+    el.innerHTML =
+      '<div class="name">'+ch.name+'</div>'+
+      '<div class="meter"><i></i></div>'+
+      '<div class="eq">'+
+        '<div class="knob"><span>LO</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="lo"></div>'+
+        '<div class="knob"><span>MID</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="mid"></div>'+
+        '<div class="knob"><span>HI</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="hi"></div>'+
+      '</div>'+
+      '<div class="panrow"><span>PAN</span><input type="range" class="pan" min="-1" max="1" step="0.02" value="0"></div>'+
+      '<input type="range" class="fader" min="0" max="1.4" step="0.01" value="1">'+
+      '<div class="gaindb">0.0 dB</div>'+
+      '<div class="ms"><button class="m" title="Mute">M</button><button class="s" title="Solo">S</button></div>';
+    mixerEl.appendChild(el);
+
+    ch.meterEl = el.querySelector('.meter > i');
+    ch.gaindbEl = el.querySelector('.gaindb');
+    el.querySelectorAll('[data-eq]').forEach(inp => inp.oninput = e => {
+      const band = e.target.dataset.eq; ch.eq[band] = parseFloat(e.target.value);
+      ch[band].gain.value = ch.eq[band];
+    });
+    el.querySelector('.pan').oninput = e => { ch.pan = parseFloat(e.target.value); ch.panner.pan.value = ch.pan; };
+    el.querySelector('.fader').oninput = e => {
+      ch.vol = parseFloat(e.target.value);
+      ch.gaindbEl.textContent = (ch.vol<=0 ? '-inf' : (20*Math.log10(ch.vol)).toFixed(1)) + ' dB';
+      applyGains();
+    };
+    const mBtn = el.querySelector('.m'), sBtn = el.querySelector('.s');
+    mBtn.onclick = () => { ch.mute = !ch.mute; mBtn.classList.toggle('on', ch.mute); applyGains(); };
+    sBtn.onclick = () => { ch.solo = !ch.solo; sBtn.classList.toggle('on', ch.solo); applyGains(); };
+    channels.push(ch);
+  });
+
+  window.__master = masterGain;
+  applyGains();
+  mixerEl.style.display = 'flex';
+  $('transport').style.display = 'flex';
+  $('actions').style.display = 'flex';
+  $('tcode').textContent = '0:00 / ' + fmt(duration);
+}
+
+function applyGains(){
+  const anySolo = channels.some(c => c.solo);
+  channels.forEach(c => { c.gain.gain.value = (c.mute || (anySolo && !c.solo)) ? 0 : c.vol; });
+}
+
+function startSources(){
+  sources = channels.map(c => { const s = ctx.createBufferSource(); s.buffer = c.buffer; s.connect(c.lo); return s; });
+  const at = Math.max(0, Math.min(offset, duration - 0.02));
+  startedAt = ctx.currentTime;
+  sources.forEach(s => s.start(0, at));
+}
+function stopSources(){ sources.forEach(s => { try{ s.stop(); }catch(e){} }); sources = []; }
+function pos(){ return playing ? Math.min(duration, offset + (ctx.currentTime - startedAt)) : offset; }
+
+function frame(){
+  if (!playing) return;
+  const p = pos();
+  $('tcode').textContent = fmt(p) + ' / ' + fmt(duration);
+  if (p >= duration - 0.03){ stopAll(); return; }
+  rafId = requestAnimationFrame(frame);
+}
+function meterLoop(){
+  channels.forEach(c => {
+    const buf = new Uint8Array(c.analyser.frequencyBinCount);
+    c.analyser.getByteTimeDomainData(buf);
+    let sum = 0; for (let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
+    const rms = Math.sqrt(sum/buf.length);
+    if (c.meterEl) c.meterEl.style.width = Math.min(100, rms*180).toFixed(0) + '%';
+  });
+  meterRaf = requestAnimationFrame(meterLoop);
+}
+
+$('play').onclick = () => {
+  if (!channels.length) return;
+  ctx.resume();
+  if (playing){ offset = pos(); stopSources(); playing = false; $('play').innerHTML='&#9658;'; cancelAnimationFrame(rafId); }
+  else { playing = true; $('play').innerHTML='&#10073;&#10073;'; startSources(); rafId = requestAnimationFrame(frame); meterLoop(); }
+};
+$('stop').onclick = () => stopAll();
+function stopAll(){
+  stopSources(); playing = false; offset = 0;
+  $('play').innerHTML = '&#9658;'; cancelAnimationFrame(rafId); cancelAnimationFrame(meterRaf);
+  channels.forEach(c => { if (c.meterEl) c.meterEl.style.width = '0%'; });
+  $('tcode').textContent = '0:00 / ' + fmt(duration);
+}
+
+// ── Offline mixdown ────────────────────────────────────────────────────────────
+async function renderMix(){
+  const sr = channels[0].buffer.sampleRate;
+  const off = new OfflineAudioContext(2, Math.ceil(duration*sr), sr);
+  const master = off.createGain(); master.gain.value = parseFloat($('masterFader').value); master.connect(off.destination);
+  const anySolo = channels.some(c => c.solo);
+  channels.forEach(c => {
+    const s = off.createBufferSource(); s.buffer = c.buffer;
+    const lo = off.createBiquadFilter(); lo.type='lowshelf'; lo.frequency.value=200; lo.gain.value=c.eq.lo;
+    const mid = off.createBiquadFilter(); mid.type='peaking'; mid.frequency.value=1000; mid.Q.value=1; mid.gain.value=c.eq.mid;
+    const hi = off.createBiquadFilter(); hi.type='highshelf'; hi.frequency.value=4000; hi.gain.value=c.eq.hi;
+    const pan = off.createStereoPanner(); pan.pan.value=c.pan;
+    const g = off.createGain(); g.gain.value = (c.mute || (anySolo && !c.solo)) ? 0 : c.vol;
+    s.connect(lo).connect(mid).connect(hi).connect(pan).connect(g).connect(master);
+    s.start(0);
+  });
+  return audioBufferToWav(await off.startRendering());
+}
+function audioBufferToWav(buf){
+  const numCh = Math.min(2, buf.numberOfChannels), len = buf.length, sr = buf.sampleRate;
+  const bps = 4, blockAlign = numCh*bps, dataLen = len*blockAlign;
+  const ab = new ArrayBuffer(44+dataLen), dv = new DataView(ab); let o = 0;
+  const ws = s => { for (let i=0;i<s.length;i++) dv.setUint8(o++, s.charCodeAt(i)); };
+  ws('RIFF'); dv.setUint32(o,36+dataLen,true); o+=4; ws('WAVE'); ws('fmt ');
+  dv.setUint32(o,16,true); o+=4; dv.setUint16(o,3,true); o+=2; dv.setUint16(o,numCh,true); o+=2;
+  dv.setUint32(o,sr,true); o+=4; dv.setUint32(o,sr*blockAlign,true); o+=4;
+  dv.setUint16(o,blockAlign,true); o+=2; dv.setUint16(o,32,true); o+=2; ws('data'); dv.setUint32(o,dataLen,true); o+=4;
+  const chans = []; for (let c=0;c<numCh;c++) chans.push(buf.getChannelData(c));
+  for (let i=0;i<len;i++){ for (let c=0;c<numCh;c++){ dv.setFloat32(o, chans[c][i], true); o+=4; } }
+  return new Blob([ab], { type:'audio/wav' });
+}
+
+$('mixdown').onclick = async () => {
+  if (!channels.length) return;
+  $('mixdown').disabled = true; setStatus('Rendering mixdown...');
+  try {
+    const blob = await renderMix();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = '8d_mixdown.wav'; a.click();
+    setStatus('Mixdown saved.');
+  } catch(e){ setStatus('Mixdown failed: ' + e.message, true); }
+  $('mixdown').disabled = false;
+};
+
+$('to8d').onclick = async () => {
+  if (!channels.length) return;
+  $('to8d').disabled = true; setStatus('Rendering mix, then sending it to the 8D engine...');
+  try {
+    const blob = await renderMix();
+    const fd = new FormData();
+    fd.append('file', new File([blob], 'mix.wav', { type:'audio/wav' }));
+    fd.append('preset', 'reference_luxe'); fd.append('stem_mode', 'classic'); fd.append('fmt', 'wav');
+    const res = await fetch(API + '/convert', { method:'POST', body:fd });
+    if (!res.ok){ throw new Error(await res.text()); }
+    const { job_id } = await res.json();
+    setStatus('8D render started...');
+    for (let i=0;i<400;i++){
+      const job = await (await fetch(API + '/jobs/' + job_id)).json();
+      if (job.message) setStatus(job.message);
+      if (job.status === 'complete'){
+        const u = job.download_url.startsWith('http') ? job.download_url : API + job.download_url;
+        $('result').innerHTML = '<a href="'+u+'" download>&#11015; Download your 8D-spatialized mix</a>';
+        setStatus('Done.'); break;
+      }
+      if (job.status === 'failed'){ setStatus('8D render failed: ' + (job.error||''), true); break; }
+      await wait(2000);
+    }
+  } catch(e){ setStatus('Could not send to 8D: ' + e.message, true); }
+  $('to8d').disabled = false;
+};
+</script>
+</body>
+</html>
+"""
