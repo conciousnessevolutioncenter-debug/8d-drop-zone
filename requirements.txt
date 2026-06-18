@@ -23,3 +23,6 @@ itsdangerous>=2.1
 psycopg2-binary>=2.9
 # Payments (Phase 4). Activates only when STRIPE_SECRET_KEY is set.
 stripe>=9.0
+# HEIC/HEIF (iPhone photos) -> JPEG conversion for post images.
+pillow>=10.0
+pillow-heif>=0.16

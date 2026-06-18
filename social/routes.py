@@ -114,11 +114,10 @@ def feed(request: Request, db: Session = Depends(get_db), img: str = ""):
     composer = """<div class="card"><form method="post" action="/social/posts" enctype="multipart/form-data">
       <textarea name="body" placeholder="Share a track or a thought…" maxlength="2000"></textarea>
       <label style="margin-top:10px">Image (optional)</label>
-      <input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp">
+      <input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/heic,image/heif,.heic,.heif">
       <button class="btn" type="submit">Post</button></form></div>"""
     banner = ('<div class="card" style="border-color:rgba(255,138,138,.4);background:rgba(255,138,138,.06);margin-bottom:4px">'
-              '<span class="err" style="margin:0">Couldn\'t add that image — supported types are JPG, PNG, GIF, WebP, AVIF or BMP, up to 8 MB. '
-              '(iPhone HEIC photos aren\'t supported yet — share as JPG.)</span></div>') if img == "err" else ""
+              '<span class="err" style="margin:0">Couldn\'t add that image — supported types are JPG, PNG, GIF, WebP, AVIF, BMP and HEIC, up to 8 MB.</span></div>') if img == "err" else ""
     feed_html = "".join(_post_card(db, p, user) for p in rows) or '<p class="muted" style="margin-top:16px">Your feed is quiet — follow some creators or post something.</p>'
     return HTMLResponse(layout("Feed", banner + composer + feed_html, user, "feed"))
 
@@ -276,22 +275,44 @@ def reset_submit(token: str, request: Request, db: Session = Depends(get_db), pa
     return HTMLResponse(layout("Reset password", "<h1>Account not found</h1>", None), status_code=404)
 
 
+def _heic_to_jpeg(data: bytes) -> bytes | None:
+    """Convert HEIC/HEIF (iPhone photos) to JPEG so it renders in browsers."""
+    try:
+        import io
+        import pillow_heif
+        from PIL import Image
+        pillow_heif.register_heif_opener()
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=90)
+        return out.getvalue()
+    except Exception as exc:
+        print(f"[social] HEIC->JPEG conversion failed: {exc}", flush=True)
+        return None
+
+
 async def _save_image(image: UploadFile | None) -> str | None:
     """Persist an uploaded image and return its served URL, or None if the file
-    isn't a supported/renderable image or is too large."""
+    isn't a supported/renderable image or is too large. HEIC/HEIF is converted
+    to JPEG; generic content-types fall back to the file extension."""
     if not image or not image.filename:
-        return None
-    ext = _IMG_EXT.get((image.content_type or "").lower())
-    if not ext:
-        # Fall back to the filename's extension (covers generic content-types).
-        suf = Path(image.filename).suffix.lower()
-        if suf in _IMG_EXTS:
-            ext = ".jpg" if suf == ".jpeg" else suf
-    if not ext:
         return None
     data = await image.read(_MAX_IMG + 1)
     if not data or len(data) > _MAX_IMG:
         return None
+    ct = (image.content_type or "").lower()
+    suf = Path(image.filename).suffix.lower()
+    if ct in ("image/heic", "image/heif") or suf in (".heic", ".heif"):
+        jpg = _heic_to_jpeg(data)
+        if not jpg:
+            return None
+        data, ext = jpg, ".jpg"
+    else:
+        ext = _IMG_EXT.get(ct)
+        if not ext and suf in _IMG_EXTS:
+            ext = ".jpg" if suf == ".jpeg" else suf
+        if not ext:
+            return None
     name = f"{uuid.uuid4().hex}{ext}"
     (MEDIA_DIR / name).write_bytes(data)
     return f"/social/media/{name}"
