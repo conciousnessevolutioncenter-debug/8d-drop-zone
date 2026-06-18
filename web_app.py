@@ -538,6 +538,7 @@ HTML = """
           <input id="file" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.aiff">
           <div class="bar" id="bar"><div class="fill"></div></div>
           <div class="status-card"><span class="tlabel">Telemetry</span><div class="status" id="status">Standby · Ready for upload.</div></div>
+          <div id="abplayer"></div>
         </div>
       </div>
     </section>
@@ -590,6 +591,7 @@ const preset = document.getElementById('preset');
 const stemMode = document.getElementById('stemMode');
 const mixPrompt = document.getElementById('mixPrompt');
 const fmtSel = document.getElementById('fmt');
+let lastOriginalFile = null;
 
 // ── Direct API routing ────────────────────────────────────────────────────────
 // Uploads and downloads go straight to Railway, skipping the Vercel proxy.
@@ -632,6 +634,7 @@ file.addEventListener('change', e => { const f = e.target.files[0]; if (f && DSP
 const MAX_UPLOAD_MB = 200;
 async function upload(f) {
   if (!DSP_OK) return;
+  lastOriginalFile = f;
   const mb = (f.size / 1048576).toFixed(1);
   if (f.size > MAX_UPLOAD_MB * 1024 * 1024) {
     title.textContent = 'File too large';
@@ -704,12 +707,76 @@ async function pollJob(jobId) {
       hint.innerHTML = links;
       const loud = (job.lufs != null) ? `\\nLoudness: ${job.lufs} LUFS | True peak: ${job.true_peak} dBTP` : '';
       statusEl.textContent = `Profile: ${job.preset}\\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\\nPrompt: ${job.mix_notes || 'Selected profile only'}\\nBPM: ${job.bpm}\\nOrbit: ${job.rotation_cpm} cycles/min${loud}\\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
+      buildABPlayer(dlUrl, lastOriginalFile);
       return;
     }
     if (job.status === 'failed') throw new Error(job.error || 'Render failed');
     statusEl.textContent = `${job.message || 'Rendering…'}\\nYou can leave this tab open until the download link appears.`;
     await new Promise(r => setTimeout(r, 1500));
   }
+}
+
+// ── A/B compare + waveform (Web Audio) ─────────────────────────────────────────
+let _abCtx = null;
+async function buildABPlayer(resultUrl, originalFile) {
+  const el = document.getElementById('abplayer');
+  if (!el) return;
+  el.innerHTML = '<div class="muted" style="margin-top:12px;font-size:12px">Loading A/B preview…</div>';
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { el.innerHTML = ''; return; }
+    _abCtx = _abCtx || new AC();
+    const ctx = _abCtx;
+    const [resBuf, origBuf] = await Promise.all([
+      fetch(resultUrl).then(r => r.arrayBuffer()).then(a => ctx.decodeAudioData(a)),
+      originalFile ? originalFile.arrayBuffer().then(a => ctx.decodeAudioData(a)).catch(() => null) : Promise.resolve(null),
+    ]);
+    el.innerHTML = `
+      <style>.abtab{cursor:pointer;border:1px solid rgba(255,255,255,.18);background:transparent;color:#8a93a8;border-radius:999px;padding:5px 10px;font-family:monospace;font-size:10px;letter-spacing:.08em}.abtab.on{color:#06101c;background:#62e0ff;border-color:transparent}</style>
+      <div style="margin-top:14px;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:12px 14px;background:rgba(13,20,38,.4)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <button id="abPlay" type="button" style="cursor:pointer;border:none;border-radius:999px;width:38px;height:38px;background:linear-gradient(135deg,#62e0ff,#9d8bff);color:#06101c;font-size:15px">&#9658;</button>
+          <button id="abA" type="button" class="abtab">A · Original</button>
+          <button id="abB" type="button" class="abtab on">B · 8D</button>
+          <span id="abTime" style="margin-left:auto;font-family:monospace;font-size:11px;color:#8a93a8">0:00</span>
+        </div>
+        <canvas id="abWave" style="width:100%;height:64px;display:block"></canvas>
+      </div>`;
+    const canvas = document.getElementById('abWave');
+    const playBtn = document.getElementById('abPlay'), btnA = document.getElementById('abA'), btnB = document.getElementById('abB'), timeEl = document.getElementById('abTime');
+    if (!origBuf) { btnA.disabled = true; btnA.style.opacity = 0.4; btnA.title = 'Original preview unavailable'; }
+    drawWave(canvas, resBuf, 0);
+    let src = null, which = 'B', playing = false, offset = 0, startedAt = 0, rafId = 0;
+    const activeBuf = () => (which === 'A' && origBuf ? origBuf : resBuf);
+    const pos = () => playing ? Math.min(activeBuf().duration, offset + (ctx.currentTime - startedAt)) : offset;
+    const fmtT = s => { s = Math.max(0, s | 0); return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0'); };
+    function frame() {
+      if (!playing) return;
+      const p = pos();
+      timeEl.textContent = fmtT(p);
+      drawWave(canvas, resBuf, p / resBuf.duration);
+      if (p >= activeBuf().duration - 0.03) { stopSrc(); playing = false; offset = 0; playBtn.innerHTML = '&#9658;'; drawWave(canvas, resBuf, 0); timeEl.textContent = '0:00'; return; }
+      rafId = requestAnimationFrame(frame);
+    }
+    function stopSrc() { if (src) { try { src.stop(); } catch (e) {} src.disconnect(); src = null; } cancelAnimationFrame(rafId); }
+    function startSrc() { const b = activeBuf(); src = ctx.createBufferSource(); src.buffer = b; src.connect(ctx.destination); offset = Math.min(offset, b.duration - 0.03); startedAt = ctx.currentTime; src.start(0, Math.max(0, offset)); rafId = requestAnimationFrame(frame); }
+    playBtn.onclick = () => { ctx.resume(); if (playing) { offset = pos(); stopSrc(); playing = false; playBtn.innerHTML = '&#9658;'; } else { playing = true; playBtn.innerHTML = '&#10073;&#10073;'; startSrc(); } };
+    function setWhich(w) { if (w === which) return; const p = pos(), wasPlaying = playing; if (playing) stopSrc(); which = w; offset = p; btnA.classList.toggle('on', w === 'A'); btnB.classList.toggle('on', w === 'B'); if (wasPlaying) { playing = true; startSrc(); } }
+    btnA.onclick = () => { if (origBuf) setWhich('A'); };
+    btnB.onclick = () => setWhich('B');
+  } catch (e) {
+    el.innerHTML = '<div class="muted" style="margin-top:10px;font-size:12px">A/B preview unavailable for this file.</div>';
+  }
+}
+function drawWave(canvas, buf, playhead) {
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth || 560, h = 64;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const g = canvas.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const data = buf.getChannelData(0), step = Math.max(1, (data.length / w) | 0), mid = h / 2;
+  g.strokeStyle = 'rgba(98,224,255,.55)'; g.lineWidth = 1; g.beginPath();
+  for (let x = 0; x < w; x++) { let mn = 1, mx = -1; const s = x * step; for (let i = 0; i < step; i++) { const v = data[s + i] || 0; if (v < mn) mn = v; if (v > mx) mx = v; } g.moveTo(x, mid + mn * mid); g.lineTo(x, mid + mx * mid); }
+  g.stroke();
+  if (playhead != null) { const px = Math.max(0, Math.min(1, playhead)) * w; g.strokeStyle = '#9d8bff'; g.lineWidth = 2; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, h); g.stroke(); }
 }
 
 /* Flight-profile cards act as a selector: tap one to choose it (syncs the
