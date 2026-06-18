@@ -27,6 +27,7 @@ else:
         from eightd_engine.dsp import (
             AudioData,
             analyze_correlation,
+            measure_loudness_file,
             bpm_to_premium_rotation_cpm,
             estimate_bpm,
             panning_preset_names,
@@ -701,7 +702,8 @@ async function pollJob(jobId) {
         links += `<br><a href="${stemsUrl}" download>⬇ Download stems (${job.stem_count} files, .zip)</a>`;
       }
       hint.innerHTML = links;
-      statusEl.textContent = `Profile: ${job.preset}\\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\\nPrompt: ${job.mix_notes || 'Selected profile only'}\\nBPM: ${job.bpm}\\nOrbit: ${job.rotation_cpm} cycles/min\\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
+      const loud = (job.lufs != null) ? `\\nLoudness: ${job.lufs} LUFS | True peak: ${job.true_peak} dBTP` : '';
+      statusEl.textContent = `Profile: ${job.preset}\\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\\nPrompt: ${job.mix_notes || 'Selected profile only'}\\nBPM: ${job.bpm}\\nOrbit: ${job.rotation_cpm} cycles/min${loud}\\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
       return;
     }
     if (job.status === 'failed') throw new Error(job.error || 'Render failed');
@@ -1070,6 +1072,12 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                 felt_presence=settings["felt_presence"],
             )
             _log("render_8d_to_wav complete")
+        _set_job(job_id, message="Measuring loudness…")
+        try:
+            lufs, true_peak = measure_loudness_file(out)
+        except Exception as _le:
+            lufs, true_peak = None, None
+            _log(f"loudness measure skipped: {_le}")
         _set_job(job_id, message=f"Writing {fmt.upper()} export…")
         deliver = _convert_format(out, fmt)
         _set_job(
@@ -1080,6 +1088,8 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             download_url=f"/files/{deliver.name}",
             bpm=round(bpm, 1),
             rotation_cpm=round(rotation_cpm, 2),
+            lufs=lufs,
+            true_peak=true_peak,
             correlation=round(report.correlation, 3),
             side_mid_ratio=round(report.side_mid_ratio, 3),
             phase="phase warning" if report.phase_warning else "phase safe",

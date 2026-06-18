@@ -121,6 +121,68 @@ def rms_level(samples: np.ndarray) -> float:
     return float(np.sqrt(np.mean(x * x) + 1e-18))
 
 
+def _k_weighting(fs: float):
+    """ITU-R BS.1770 K-weighting biquads (stage 1 high-shelf, stage 2 high-pass),
+    re-derived for the actual sample rate. Returns ((b1,a1),(b2,a2))."""
+    import numpy as _np
+    f0 = 1681.974450955533; G = 3.999843853973347; Q = 0.7071752369554196
+    K = _np.tan(_np.pi * f0 / fs); Vh = 10 ** (G / 20.0); Vb = Vh ** 0.4996667741545416
+    a0 = 1.0 + K / Q + K * K
+    b1 = _np.array([(Vh + Vb * K / Q + K * K) / a0, 2.0 * (K * K - Vh) / a0, (Vh - Vb * K / Q + K * K) / a0])
+    a1 = _np.array([1.0, 2.0 * (K * K - 1.0) / a0, (1.0 - K / Q + K * K) / a0])
+    f0 = 38.13547087602444; Q = 0.5003270373238773
+    K = _np.tan(_np.pi * f0 / fs); a0h = 1.0 + K / Q + K * K
+    b2 = _np.array([1.0, -2.0, 1.0])
+    a2 = _np.array([1.0, 2.0 * (K * K - 1.0) / a0h, (1.0 - K / Q + K * K) / a0h])
+    return (b1, a1), (b2, a2)
+
+
+def measure_loudness_file(path) -> tuple[float | None, float | None]:
+    """Integrated loudness (LUFS, BS.1770 with absolute + relative gating) and
+    true-peak (dBTP, 4x oversample). Streamed in 400 ms blocks so it stays
+    memory-bounded for any length. Returns (lufs, true_peak_dbtp) or (None, None)."""
+    try:
+        import soundfile as sf
+        from scipy.signal import lfilter, resample_poly
+    except Exception:
+        return None, None
+    info = sf.info(str(path))
+    fs = int(info.samplerate)
+    (b1, a1), (b2, a2) = _k_weighting(fs)
+    block = max(1, int(0.4 * fs))
+    zi1 = [np.zeros(2), np.zeros(2)]
+    zi2 = [np.zeros(2), np.zeros(2)]
+    z_blocks: list[float] = []   # per-block channel-summed mean square
+    l_blocks: list[float] = []   # per-block loudness
+    true_peak = 0.0
+    for chunk in sf.blocks(str(path), blocksize=block, dtype="float32", always_2d=True):
+        if chunk.shape[0] == 0:
+            continue
+        nch = min(2, chunk.shape[1])
+        for ch in range(chunk.shape[1]):
+            up = resample_poly(chunk[:, ch].astype(np.float64), 4, 1)
+            if up.size:
+                true_peak = max(true_peak, float(np.max(np.abs(up))))
+        zsum = 0.0
+        for ch in range(nch):
+            x = chunk[:, ch].astype(np.float64)
+            y1, zi1[ch] = lfilter(b1, a1, x, zi=zi1[ch])
+            y2, zi2[ch] = lfilter(b2, a2, y1, zi=zi2[ch])
+            zsum += float(np.mean(y2 * y2)) if y2.size else 0.0
+        z_blocks.append(zsum)
+        l_blocks.append(-0.691 + 10.0 * np.log10(zsum + 1e-12))
+    if not z_blocks:
+        return None, None
+    # Absolute gate at -70 LUFS, then relative gate at (gated mean - 10 LU).
+    abs_keep = [z for z, l in zip(z_blocks, l_blocks) if l > -70.0] or z_blocks
+    base = -0.691 + 10.0 * np.log10(sum(abs_keep) / len(abs_keep) + 1e-12)
+    rel = base - 10.0
+    keep = [z for z, l in zip(z_blocks, l_blocks) if l > -70.0 and l > rel] or abs_keep
+    lufs = -0.691 + 10.0 * np.log10(sum(keep) / len(keep) + 1e-12)
+    tp_db = 20.0 * np.log10(true_peak + 1e-12)
+    return round(float(lufs), 1), round(float(tp_db), 2)
+
+
 def analyze_correlation(samples: np.ndarray) -> CorrelationReport:
     """Measure stereo correlation and flag potentially phasey output.
 
