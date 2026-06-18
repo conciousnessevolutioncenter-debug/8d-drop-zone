@@ -27,7 +27,11 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # persistent volume or swap to S3/R2 (the container's temp dir is ephemeral).
 MEDIA_DIR = Path(tempfile.gettempdir()) / "8d_social_media"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-_IMG_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
+# content-type -> extension, plus an extension allowlist for fallback when the
+# browser sends a generic content-type (e.g. application/octet-stream).
+_IMG_EXT = {"image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png",
+            "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/bmp": ".bmp"}
+_IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp"}
 _MAX_IMG = 8 * 1024 * 1024
 
 
@@ -88,7 +92,7 @@ def _post_card(db: Session, post: Post, viewer: User | None) -> str:
 
 
 @router.get("/", response_class=HTMLResponse)
-def feed(request: Request, db: Session = Depends(get_db)):
+def feed(request: Request, db: Session = Depends(get_db), img: str = ""):
     user = optional_user(request, db)
     if not user:
         body = """<h1>The 8D Engine, now social.</h1>
@@ -107,8 +111,11 @@ def feed(request: Request, db: Session = Depends(get_db)):
       <label style="margin-top:10px">Image (optional)</label>
       <input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp">
       <button class="btn" type="submit">Post</button></form></div>"""
+    banner = ('<div class="card" style="border-color:rgba(255,138,138,.4);background:rgba(255,138,138,.06);margin-bottom:4px">'
+              '<span class="err" style="margin:0">Couldn\'t add that image — supported types are JPG, PNG, GIF, WebP, AVIF or BMP, up to 8 MB. '
+              '(iPhone HEIC photos aren\'t supported yet — share as JPG.)</span></div>') if img == "err" else ""
     feed_html = "".join(_post_card(db, p, user) for p in rows) or '<p class="muted" style="margin-top:16px">Your feed is quiet — follow some creators or post something.</p>'
-    return HTMLResponse(layout("Feed", composer + feed_html, user, "feed"))
+    return HTMLResponse(layout("Feed", banner + composer + feed_html, user, "feed"))
 
 
 @router.get("/register", response_class=HTMLResponse)
@@ -233,12 +240,18 @@ def reset_submit(token: str, request: Request, db: Session = Depends(get_db), pa
 
 
 async def _save_image(image: UploadFile | None) -> str | None:
-    """Persist an uploaded image (validated) and return its served URL, or None."""
+    """Persist an uploaded image and return its served URL, or None if the file
+    isn't a supported/renderable image or is too large."""
     if not image or not image.filename:
         return None
     ext = _IMG_EXT.get((image.content_type or "").lower())
     if not ext:
-        return None  # silently ignore non-images rather than failing the post
+        # Fall back to the filename's extension (covers generic content-types).
+        suf = Path(image.filename).suffix.lower()
+        if suf in _IMG_EXTS:
+            ext = ".jpg" if suf == ".jpeg" else suf
+    if not ext:
+        return None
     data = await image.read(_MAX_IMG + 1)
     if not data or len(data) > _MAX_IMG:
         return None
@@ -253,10 +266,14 @@ async def create_post(request: Request, db: Session = Depends(get_db),
                       image: UploadFile = File(None),
                       user: User = Depends(current_user)):
     text = (body or "").strip()
+    image_provided = bool(image and image.filename)
     image_url = await _save_image(image)
     if text or track_job_id or image_url:
         db.add(Post(author_id=user.id, body=text[:2000], track_job_id=track_job_id or None, image_url=image_url))
         db.commit()
+    # If the user attached a file we couldn't use, tell them (instead of silently dropping it).
+    if image_provided and not image_url:
+        return RedirectResponse("/social?img=err", status_code=303)
     return RedirectResponse("/social", status_code=303)
 
 
