@@ -1455,7 +1455,10 @@ MIXER_HTML = r"""<!doctype html>
   </div>
 
 <script>
-const API = location.origin;
+// Talk to the long-lived Railway backend directly in production (Vercel can't
+// run the DSP/separation worker). Same single-hop pattern as the home page.
+const IS_DEV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const API = IS_DEV ? '' : 'https://luminous-endurance-production-0696.up.railway.app';
 const $ = id => document.getElementById(id);
 const drop = $('drop'), fileIn = $('file'), statusEl = $('status');
 let ctx = null, channels = [], duration = 0;
