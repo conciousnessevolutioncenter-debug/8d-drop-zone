@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Lock
 from dataclasses import dataclass
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, Request, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -80,6 +80,7 @@ try:
     from social.routes import router as social_router
     from social.realtime import rt_router as social_rt_router
     from social.billing import billing_router as social_billing_router
+    from social.tracks import tracks_router as social_tracks_router
     from social.db import init_db as _social_init_db
 
     app.add_middleware(
@@ -91,6 +92,7 @@ try:
     app.include_router(social_router)
     app.include_router(social_rt_router)
     app.include_router(social_billing_router)
+    app.include_router(social_tracks_router)
     _social_init_db()
 
     # CSRF defense: reject cross-origin state-changing requests to /social.
@@ -708,7 +710,12 @@ async function pollJob(jobId) {
         const stemsUrl = job.stems_url.startsWith('http') ? job.stems_url : `${API}${job.stems_url}`;
         links += `<br><a href="${stemsUrl}" download>⬇ Download stems (${job.stem_count} files, .zip)</a>`;
       }
+      links += `<div id="pubrow" style="margin-top:16px">
+        <button id="pubBtn" type="button" style="cursor:pointer;border:none;border-radius:999px;padding:12px 20px;font-family:var(--mono,monospace);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#06101c;background:linear-gradient(135deg,#62e0ff,#9d8bff)">🌐 Publish &amp; share this track</button>
+        <div id="shareBox" style="margin-top:12px"></div></div>`;
       hint.innerHTML = links;
+      const pb = document.getElementById('pubBtn');
+      if (pb) pb.onclick = () => publishTrack(jobId);
       const loud = (job.lufs != null) ? `\\nLoudness: ${job.lufs} LUFS | True peak: ${job.true_peak} dBTP` : '';
       statusEl.textContent = `Profile: ${job.preset}\\nMode: ${job.stem_mode || 'classic'} (${job.stem_engine || 'full mix'})\\nPrompt: ${job.mix_notes || 'Selected profile only'}\\nBPM: ${job.bpm}\\nOrbit: ${job.rotation_cpm} cycles/min${loud}\\nCorrelation: ${job.correlation} | Side/Mid: ${job.side_mid_ratio} | ${job.phase}`;
       buildABPlayer(dlUrl, lastOriginalFile);
@@ -717,6 +724,42 @@ async function pollJob(jobId) {
     if (job.status === 'failed') throw new Error(job.error || 'Render failed');
     statusEl.textContent = `${job.message || 'Rendering…'}\\nYou can leave this tab open until the download link appears.`;
     await new Promise(r => setTimeout(r, 1500));
+  }
+}
+
+// ── Publish & share (distribution engine) ──────────────────────────────────────
+async function publishTrack(jobId) {
+  const box = document.getElementById('shareBox');
+  const btn = document.getElementById('pubBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Publishing…'; }
+  try {
+    const fd = new FormData();
+    fd.append('job_id', jobId);
+    if (lastOriginalFile) fd.append('title', lastOriginalFile.name.replace(/\\.[^.]+$/, ''));
+    const res = await fetch(`${API}/tracks/publish`, { method: 'POST', body: fd });
+    if (!res.ok) { let t = await res.text(); try { const d = JSON.parse(t); if (d.detail) t = d.detail; } catch(_) {} throw new Error(t); }
+    const data = await res.json();
+    const u = data.url, txt = encodeURIComponent('🎧 Listen to my track in 8D (headphones on)');
+    const eu = encodeURIComponent(u);
+    if (btn) btn.style.display = 'none';
+    box.innerHTML = `
+      <div style="border:1px solid var(--hair,rgba(255,255,255,.14));border-radius:14px;padding:14px;background:rgba(13,20,38,.4)">
+        <div style="font-family:var(--mono,monospace);font-size:11px;letter-spacing:.1em;color:#62e0ff;text-transform:uppercase;margin-bottom:8px">✓ Live — every share is a free ad</div>
+        <a href="${u}" target="_blank" style="color:#9d8bff;word-break:break-all;font-size:13px">${u}</a>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <a href="${u}" target="_blank" style="text-decoration:none;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:#cdd6e6">▶ Open page</a>
+          <button type="button" id="copyShare" style="cursor:pointer;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:#cdd6e6;background:transparent">Copy link</button>
+          <a href="https://twitter.com/intent/tweet?text=${txt}&url=${eu}" target="_blank" style="text-decoration:none;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:#cdd6e6">X</a>
+          <a href="https://api.whatsapp.com/send?text=${txt}%20${eu}" target="_blank" style="text-decoration:none;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:#cdd6e6">WhatsApp</a>
+          <a href="https://www.facebook.com/sharer/sharer.php?u=${eu}" target="_blank" style="text-decoration:none;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:#cdd6e6">Facebook</a>
+        </div>
+        <div style="font-size:11px;color:#8a93a8;margin-top:10px">Open the page to grab a TikTok/Reels visualizer video.</div>
+      </div>`;
+    const cp = document.getElementById('copyShare');
+    if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText(u); cp.textContent = 'Copied!'; setTimeout(() => cp.textContent = 'Copy link', 1600); } catch(_) {} };
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🌐 Publish & share this track'; }
+    if (box) box.innerHTML = `<div style="color:#ff8a8a;font-size:12px">Publish failed: ${e.message}</div>`;
   }
 }
 
@@ -1193,6 +1236,7 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
             status="complete",
             message="Done.",
             output_name=deliver.name,
+            wav_name=out.name,
             download_url=f"/files/{deliver.name}",
             bpm=round(bpm, 1),
             rotation_cpm=round(rotation_cpm, 2),
@@ -1408,6 +1452,52 @@ async def mixer_separate(file: UploadFile = File(...)):
 @app.get("/mixer", response_class=HTMLResponse)
 def mixer_page():
     return MIXER_HTML
+
+
+@app.post("/tracks/publish")
+async def publish_track(request: Request, job_id: str = Form(...), title: str = Form(""), artist: str = Form("")):
+    """Turn a finished 8D render into a public, shareable track page.
+
+    Reads the completed job's WAV master, makes a streamable mp3, and persists a
+    Track (audio + waveform + loudness) via the social layer. Returns the public
+    URL — the homepage then shows one-tap share buttons. This is the front door of
+    the distribution engine: every published track is a link that sells the app.
+    """
+    if not SOCIAL_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Publishing isn't available on this server.")
+    with JOBS_LOCK:
+        job = dict(JOBS.get(job_id) or {})
+    if not job or job.get("status") != "complete":
+        raise HTTPException(status_code=404, detail="Render not found or not finished yet.")
+    wav_path = APP_DIR / (job.get("wav_name") or "")
+    if not wav_path.exists():
+        wav_path = APP_DIR / (job.get("output_name") or "")
+    if not wav_path.exists():
+        raise HTTPException(status_code=410, detail="The rendered file expired — re-render, then publish.")
+    is_wav = wav_path.suffix.lower() == ".wav"
+    mp3_path = _convert_format(wav_path, "mp3") if is_wav else wav_path
+    base_title = (title or "").strip() or Path(job.get("input_name") or "Untitled 8D track").stem
+
+    from social.db import SessionLocal
+    from social import tracks as _tracks
+    db = SessionLocal()
+    try:
+        try:
+            owner = request.session.get("uid") or None
+        except Exception:
+            owner = None
+        track = _tracks.create_track(
+            db, audio_path=mp3_path,
+            wav_path=wav_path if is_wav else None,
+            title=base_title, artist=(artist or "").strip(),
+            lufs=str(job.get("lufs") or ""), true_peak=str(job.get("true_peak") or ""),
+            preset=str(job.get("preset") or ""), owner_id=owner,
+            allow_download=False, watermarked=True,
+        )
+        base = _tracks.site_url(request)
+        return {"slug": track.slug, "url": f"{base}/t/{track.slug}", "embed": f"{base}/embed/{track.slug}"}
+    finally:
+        db.close()
 
 
 MIXER_HTML = r"""<!doctype html>

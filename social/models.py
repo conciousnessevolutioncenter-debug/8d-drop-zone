@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Index
+    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index
 )
 from sqlalchemy.orm import relationship
 
@@ -148,4 +148,33 @@ class Notification(Base):
     text = Column(String(200), nullable=False)
     link = Column(String(200), nullable=False, default="")
     read = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now, index=True)
+
+
+class Track(Base):
+    """A published 8D master — the unit of the distribution engine.
+
+    Each one gets a public page (/t/{slug}) with a spatial player, auto-unfurling
+    share cards, and a TikTok/Reels visualizer video. Audio + cover live in the
+    persistent media dir; metadata (peaks, loudness) lives here so the page paints
+    instantly without decoding the whole file.
+    """
+    __tablename__ = "tracks"
+    id = Column(Integer, primary_key=True)
+    slug = Column(String(16), unique=True, index=True, nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    title = Column(String(120), nullable=False, default="Untitled")
+    artist = Column(String(80), nullable=False, default="")
+    audio_name = Column(String(200), nullable=False)            # streamable mp3 in MEDIA_DIR
+    wav_name = Column(String(200), nullable=True)               # optional lossless download
+    duration = Column(Float, nullable=False, default=0.0)
+    lufs = Column(String(20), nullable=False, default="")
+    true_peak = Column(String(20), nullable=False, default="")
+    preset = Column(String(60), nullable=False, default="")
+    is_public = Column(Boolean, nullable=False, default=True)
+    allow_download = Column(Boolean, nullable=False, default=False)
+    watermarked = Column(Boolean, nullable=False, default=True)
+    plays = Column(Integer, nullable=False, default=0)
+    shares = Column(Integer, nullable=False, default=0)
+    peaks = Column(Text, nullable=False, default="")            # JSON array of 0..1 waveform peaks
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now, index=True)

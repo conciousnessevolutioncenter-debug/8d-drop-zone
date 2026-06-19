@@ -11,6 +11,9 @@
     { "src": "/convert",     "dest": "https://luminous-endurance-production-0696.up.railway.app/convert" },
     { "src": "/jobs/(.*)",   "dest": "https://luminous-endurance-production-0696.up.railway.app/jobs/$1" },
     { "src": "/files/(.*)",  "dest": "https://luminous-endurance-production-0696.up.railway.app/files/$1" },
+    { "src": "/t/(.*)",      "dest": "https://luminous-endurance-production-0696.up.railway.app/t/$1" },
+    { "src": "/embed/(.*)",  "dest": "https://luminous-endurance-production-0696.up.railway.app/embed/$1" },
+    { "src": "/tracks/(.*)", "dest": "https://luminous-endurance-production-0696.up.railway.app/tracks/$1" },
     { "src": "/social",      "status": 307, "headers": { "Location": "https://luminous-endurance-production-0696.up.railway.app/social" } },
     { "src": "/social/(.*)", "status": 307, "headers": { "Location": "https://luminous-endurance-production-0696.up.railway.app/social/$1" } },
     { "src": "/(.*)",        "dest": "web_app.py" }
