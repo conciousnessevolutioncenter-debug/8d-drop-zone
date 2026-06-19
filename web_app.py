@@ -1627,6 +1627,8 @@ MIXER_HTML = r"""<!doctype html>
     background:radial-gradient(circle at 50% 35%, #8aecff, #2bb6e0); box-shadow:0 0 14px rgba(72,227,255,.4), inset 0 1px 0 rgba(255,255,255,.4); }
   .tbtn{ cursor:pointer; border:1px solid #05080d; border-radius:7px; padding:9px 14px; font:700 10px var(--mono); letter-spacing:.12em;
     text-transform:uppercase; color:#cdd6e6; background:linear-gradient(180deg,#1d2636,#121826); box-shadow:inset 0 1px 0 rgba(255,255,255,.06); }
+  .tbtn.on{ color:#06101c; border-color:transparent; background:linear-gradient(135deg,var(--cyan),var(--violet)); box-shadow:0 0 14px rgba(72,227,255,.45); }
+  .spatialhint{ font:600 10px var(--mono); color:var(--violet); letter-spacing:.04em; }
   .tcode{ font:600 13px var(--mono); color:#6effc8; background:#04120c; padding:8px 13px; border-radius:6px; letter-spacing:.1em;
     box-shadow:inset 0 2px 6px rgba(0,0,0,.85), 0 0 0 1px #0a0e15; text-shadow:0 0 8px rgba(110,255,200,.45); }
   .master{ display:flex; align-items:center; gap:12px; margin-left:auto; }
@@ -1741,7 +1743,9 @@ MIXER_HTML = r"""<!doctype html>
       <div class="transport" id="transport">
         <button class="play" id="play" title="Play / pause">&#9658;</button>
         <button class="tbtn" id="stop">Stop</button>
+        <button class="tbtn" id="spatial" title="Head-tracked spatial preview">&#127744; Head-track</button>
         <span class="tcode" id="tcode">0:00 / 0:00</span>
+        <span class="spatialhint" id="spatialHint"></span>
         <div class="master">
           <span class="mlab">Master</span>
           <div id="masterMount"></div>
@@ -2181,6 +2185,61 @@ async function askProducer(){
 }
 $('vibeBtn').onclick = askProducer;
 $('vibe').addEventListener('keydown', e => { if(e.key==='Enter') askProducer(); });
+
+// ── Real-time head-tracked spatial preview (gyro -> feel the orbit) ─────────────
+// Reroutes the master through an HRTF panner that orbits the listener; on a phone,
+// the device's yaw rotates the field so the mix appears to orbit around your head.
+let spatialOn=false, spPanner=null, spRaf=0, spYaw=0, spPhase=0, spTilt=0;
+function spatialFrame(){
+  if(!spatialOn) return;
+  spPhase += 0.013;                       // gentle auto-orbit (the 8D motion)
+  const a = spPhase - spYaw;              // device yaw counter-rotates the field
+  const R = 2.6, x = R*Math.sin(a), z = -R*Math.cos(a), y = spTilt*1.2;
+  if(spPanner.positionX){ spPanner.positionX.value=x; spPanner.positionY.value=y; spPanner.positionZ.value=z; }
+  else spPanner.setPosition(x, y, z);
+  spRaf = requestAnimationFrame(spatialFrame);
+}
+async function reqOrient(){
+  try{
+    if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+      const p = await DeviceOrientationEvent.requestPermission();
+      if(p!=='granted') return false;
+    }
+  }catch(e){ return false; }
+  let got=false;
+  window.addEventListener('deviceorientation', e => {
+    if(e.alpha!=null){ spYaw = e.alpha*Math.PI/180; got=true; }
+    if(e.beta!=null){ spTilt = Math.max(-1,Math.min(1,(e.beta-45)/45)); }
+  }, true);
+  await new Promise(r=>setTimeout(r,400));
+  return got;
+}
+function enableSpatial(){
+  spPanner = ctx.createPanner();
+  spPanner.panningModel='HRTF'; spPanner.distanceModel='inverse';
+  spPanner.refDistance=1; spPanner.maxDistance=40; spPanner.rolloffFactor=0.5;
+  const L=ctx.listener;
+  if(L.forwardX){ L.forwardX.value=0; L.forwardY.value=0; L.forwardZ.value=-1; L.upX.value=0; L.upY.value=1; L.upZ.value=0; }
+  else if(L.setOrientation){ L.setOrientation(0,0,-1,0,1,0); }
+  masterGain.disconnect();
+  masterGain.connect(spPanner); spPanner.connect(ctx.destination);
+  spatialOn=true; $('spatial').classList.add('on'); spatialFrame();
+}
+function disableSpatial(){
+  spatialOn=false; cancelAnimationFrame(spRaf);
+  try{ if(spPanner) spPanner.disconnect(); masterGain.disconnect(); masterGain.connect(ctx.destination); }catch(e){}
+  spPanner=null; $('spatial').classList.remove('on'); $('spatialHint').textContent='';
+}
+$('spatial').onclick = async () => {
+  if(!loadedChannels().length){ $('spatialHint').textContent='Load stems first'; return; }
+  ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
+  if(spatialOn){ disableSpatial(); return; }
+  await ctx.resume();
+  const tracking = await reqOrient();
+  enableSpatial();
+  $('spatialHint').textContent = tracking ? 'Move your phone — the mix orbits your head 🎧' : 'Orbiting · head-tracking needs a phone gyro';
+  if(!playing) $('play').click();   // start playback so there's something to feel
+};
 </script>
 </body>
 </html>

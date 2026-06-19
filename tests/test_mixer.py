@@ -53,6 +53,15 @@ def test_homepage_links_to_the_mixer():
     assert 'href="/mixer"' in module.HTML
 
 
+def test_mixer_has_head_tracked_spatial_preview():
+    html = load_live_module().MIXER_HTML
+    assert 'id="spatial"' in html                 # the toggle
+    assert "createPanner" in html                 # HRTF 3D panner
+    assert "'HRTF'" in html or '"HRTF"' in html   # binaural model
+    assert "deviceorientation" in html            # gyro head-tracking
+    assert "DeviceOrientationEvent.requestPermission" in html  # iOS permission flow
+
+
 def test_separation_is_resilient_and_has_its_own_executor():
     import inspect
     module = load_live_module()
