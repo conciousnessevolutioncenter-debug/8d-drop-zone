@@ -1454,6 +1454,31 @@ def mixer_page():
     return MIXER_HTML
 
 
+@app.post("/ai/mix")
+async def ai_mix(request: Request):
+    """AI mix co-producer: a vibe description -> concrete per-stem mix directives.
+
+    Env-gated on ANTHROPIC_API_KEY. The mixer sends the loaded stem names + the
+    user's prompt; Claude returns level/pan/EQ/orbit moves the browser applies
+    live to the channel strips. The conversational spatial producer — the wow.
+    """
+    import ai_mix as _ai
+    if not _ai.available():
+        raise HTTPException(status_code=503, detail="The AI co-producer isn't enabled yet (set ANTHROPIC_API_KEY).")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request.")
+    prompt = (payload.get("prompt") or "").strip()
+    stems = [str(s) for s in (payload.get("stems") or []) if s]
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Describe the vibe first.")
+    try:
+        return _ai.suggest_mix(prompt[:600], stems)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Co-producer error: {exc}")
+
+
 @app.post("/tracks/publish")
 async def publish_track(request: Request, job_id: str = Form(...), title: str = Form(""), artist: str = Form("")):
     """Turn a finished 8D render into a public, shareable track page.
@@ -1581,6 +1606,20 @@ MIXER_HTML = r"""<!doctype html>
   .rh-right{ font:600 10px var(--mono); color:var(--soft); letter-spacing:.14em; }
   .led-on{ width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 9px var(--green); animation:pulse 2.4s infinite; }
   @keyframes pulse{ 0%,100%{ opacity:1 } 50%{ opacity:.45 } }
+  /* AI co-producer bar */
+  .aibar{ display:flex; align-items:center; gap:10px; padding:12px 18px; border-bottom:1px solid #000;
+    background:linear-gradient(180deg,rgba(157,139,255,.10),rgba(72,227,255,.05)); }
+  .ai-spark{ font-size:15px; filter:drop-shadow(0 0 6px rgba(157,139,255,.8)); }
+  .aibar input{ flex:1; background:#0a0e16; border:1px solid #05080d; border-radius:8px; color:#e7edf6; padding:10px 13px;
+    font-family:Inter,sans-serif; font-size:13px; box-shadow:inset 0 1px 3px rgba(0,0,0,.7); outline:none; }
+  .aibar input:focus{ border-color:var(--violet); box-shadow:inset 0 1px 3px rgba(0,0,0,.7), 0 0 0 2px rgba(157,139,255,.25); }
+  .ai-go{ cursor:pointer; border:none; border-radius:8px; padding:10px 18px; font:700 11px var(--mono); letter-spacing:.1em;
+    text-transform:uppercase; color:#06101c; background:linear-gradient(135deg,var(--cyan),var(--violet)); white-space:nowrap; }
+  .ai-go:disabled{ opacity:.5; cursor:not-allowed; }
+  .ainotes{ min-height:0; color:#cdd6e6; font-size:12.5px; line-height:1.5; padding:0 18px;
+    background:linear-gradient(180deg,rgba(157,139,255,.06),transparent); transition:padding .2s; }
+  .ainotes:not(:empty){ padding:11px 18px; border-bottom:1px solid #000; }
+  .ainotes.err{ color:var(--red); }
   /* transport */
   .transport{ display:none; align-items:center; gap:14px; padding:14px 18px; border-bottom:1px solid #000;
     background:linear-gradient(180deg,#141a26,#0e131d); }
@@ -1693,6 +1732,12 @@ MIXER_HTML = r"""<!doctype html>
         <div class="rh-left"><span class="led-on"></span> MIX&nbsp;LAB <span class="rh-sub">// 16-CHANNEL</span></div>
         <div class="rh-right" id="rhMeta">DEMUCS · 4-STEM · 32-BIT FLOAT</div>
       </div>
+      <div class="aibar" id="aibar">
+        <span class="ai-spark">✨</span>
+        <input id="vibe" autocomplete="off" placeholder="Describe the vibe — e.g. floaty vocals up front, punchy drums, deep mono bass, slow dreamy orbit"/>
+        <button class="ai-go" id="vibeBtn">Mix it</button>
+      </div>
+      <div class="ainotes" id="ainotes"></div>
       <div class="transport" id="transport">
         <button class="play" id="play" title="Play / pause">&#9658;</button>
         <button class="tbtn" id="stop">Stop</button>
@@ -1847,7 +1892,7 @@ function makeKnob(opt){
   dial.addEventListener('dblclick', ()=> set(opt.def!=null?opt.def:(min+max)/2, true));
   dial.addEventListener('wheel', e=>{ e.preventDefault(); set(value - Math.sign(e.deltaY)*range*0.03, true); }, {passive:false});
   render();
-  return { el, set:v=>set(v,false), get:()=>value };
+  return { el, set:v=>set(v,false), setFire:v=>set(v,true), get:()=>value };
 }
 
 function makeFader(opt){
@@ -1866,7 +1911,7 @@ function makeFader(opt){
   track.addEventListener('dblclick', ()=> set(opt.def!=null?opt.def:max, true));
   track.addEventListener('wheel', e=>{ e.preventDefault(); set(value - Math.sign(e.deltaY)*range*0.03, true); }, {passive:false});
   render();
-  return { el, set:v=>set(v,false), get:()=>value };
+  return { el, set:v=>set(v,false), setFire:v=>set(v,true), get:()=>value };
 }
 
 const CHANNEL_COUNT = 16;
@@ -1930,8 +1975,11 @@ function makeChannel(i){
   el.querySelector('.panmount').append(pan.el);
   const fader = makeFader({ min:0, max:1.4, value:1, def:1, onChange:v=>{ ch.vol=v; ch.gaindbEl.textContent=gainDb(v); applyGains(); } });
   el.querySelector('.fmount').append(fader.el);
+  // expose widgets so the AI co-producer can drive them live.
+  ch.knobLo=lo; ch.knobMid=mid; ch.knobHi=hi; ch.knobPan=pan; ch.faderW=fader;
 
   const mBtn = el.querySelector('.m'), sBtn = el.querySelector('.s');
+  ch.mBtn=mBtn; ch.sBtn=sBtn;
   mBtn.onclick = () => { ch.mute = !ch.mute; mBtn.classList.toggle('on', ch.mute); applyGains(); };
   sBtn.onclick = () => { ch.solo = !ch.solo; sBtn.classList.toggle('on', ch.solo); applyGains(); };
 
@@ -2089,6 +2137,50 @@ $('to8d').onclick = async () => {
   } catch(e){ cstat('Could not send to 8D: ' + e.message, true); }
   $('to8d').disabled = false;
 };
+
+// ── AI mix co-producer: describe the vibe -> Claude sets the board ──────────────
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+function setNotes(msg, err){ const n=$('ainotes'); n.textContent=msg||''; n.classList.toggle('err', !!err); }
+
+function applyAiMix(d){
+  const loaded = loadedChannels();
+  const findCh = name => {
+    const n = String(name||'').toLowerCase().trim(); if(!n) return null;
+    return loaded.find(c => c.name.toLowerCase()===n)
+        || loaded.find(c => c.name.toLowerCase().includes(n))
+        || loaded.find(c => n.includes(c.name.toLowerCase())) || null;
+  };
+  (d.channels||[]).forEach(spec => {
+    const ch = findCh(spec.stem); if(!ch) return;
+    if(typeof spec.eq_low_db==='number')  ch.knobLo.setFire(clamp(spec.eq_low_db,-12,12));
+    if(typeof spec.eq_mid_db==='number')  ch.knobMid.setFire(clamp(spec.eq_mid_db,-12,12));
+    if(typeof spec.eq_high_db==='number') ch.knobHi.setFire(clamp(spec.eq_high_db,-12,12));
+    if(typeof spec.pan==='number')        ch.knobPan.setFire(clamp(spec.pan,-1,1));
+    if(typeof spec.gain_db==='number')    ch.faderW.setFire(clamp(Math.pow(10, spec.gain_db/20),0,1.4));
+    if(spec.mute===true && !ch.mute){ ch.mute=true; ch.mBtn.classList.add('on'); }
+    if(spec.mute===false && ch.mute){ ch.mute=false; ch.mBtn.classList.remove('on'); }
+  });
+  applyGains();
+  window.__aiOrbit = d.orbit || null;
+  setNotes((d.notes || 'Done.') + (d.orbit ? '  ·  orbit: ' + d.orbit : ''));
+}
+
+async function askProducer(){
+  const v = $('vibe').value.trim(); if(!v) return;
+  const loaded = loadedChannels();
+  if(!loaded.length){ setNotes('Load some stems first, then describe the vibe.', true); return; }
+  const btn = $('vibeBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = 'Mixing…';
+  setNotes('🎧 The co-producer is dialing it in…');
+  try {
+    const res = await fetch(API + '/ai/mix', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ prompt:v, stems: loaded.map(c=>c.name) }) });
+    if(!res.ok){ let t=await res.text(); try{ const d=JSON.parse(t); if(d.detail)t=d.detail; }catch(_){} throw new Error(t); }
+    applyAiMix(await res.json());
+  } catch(e){ setNotes('⚠ ' + e.message, true); }
+  btn.disabled = false; btn.textContent = old;
+}
+$('vibeBtn').onclick = askProducer;
+$('vibe').addEventListener('keydown', e => { if(e.key==='Enter') askProducer(); });
 </script>
 </body>
 </html>
