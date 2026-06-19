@@ -68,6 +68,47 @@ def test_separation_is_resilient_and_has_its_own_executor():
     assert "range(3)" in src  # retry loop for a sleeping/cold worker
 
 
+def test_replicate_parses_real_stems_object_schema(monkeypatch, tmp_path):
+    """ryan5453/demucs returns {"stems": [{"name","audio"}, ...]} — make sure
+    the fast GPU path actually parses that shape (the bug that made it unusable
+    as a primary backend)."""
+    import sys
+    import types
+    import numpy as np
+
+    module = load_live_module()
+    if not getattr(module, "DSP_AVAILABLE", False):
+        import pytest
+        pytest.skip("DSP stack not available")
+
+    class FakeFile:
+        def __init__(self, b):
+            self._b = b
+        def read(self):
+            return self._b
+
+    fake = types.ModuleType("replicate")
+    fake.run = lambda ref, input: {"stems": [
+        {"name": "vocals", "audio": FakeFile(b"V")},
+        {"name": "drums", "audio": FakeFile(b"D")},
+        {"name": "bass", "audio": FakeFile(b"B")},
+        {"name": "other", "audio": FakeFile(b"O")},
+    ]}
+    monkeypatch.setitem(sys.modules, "replicate", fake)
+    monkeypatch.setenv("REPLICATE_API_TOKEN", "test-token")
+
+    class FakeAudio:
+        samples = np.zeros((16, 2), dtype="float32")
+        sample_rate = 44100
+
+    monkeypatch.setattr(module, "load_audio", lambda p: FakeAudio())
+
+    src = tmp_path / "in.wav"
+    src.write_bytes(b"x")
+    stems = module._separate_stems_replicate(src, tmp_path / "work")
+    assert set(stems) == {"vocals", "drums", "bass", "other"}
+
+
 def test_mixer_page_has_progress_ui():
     module = load_live_module()
     html = module.MIXER_HTML

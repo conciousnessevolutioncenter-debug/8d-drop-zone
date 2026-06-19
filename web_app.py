@@ -857,16 +857,17 @@ def _set_job(job_id: str, **updates):
         job.update(updates)
         job["updated_at"] = time.time()
 
-def _separate_stems_replicate(src: Path, work_dir: Path):
-    """Separate stems with Demucs hosted on Replicate (no local torch/RAM).
+def _separate_stems_replicate(src: Path, work_dir: Path, on_status=None):
+    """Separate stems with Demucs hosted on Replicate's GPU (no local torch/RAM).
 
-    Sends the track to Replicate, downloads the returned stems into ``work_dir``
-    (so the existing zip step packages them), and returns ``{name: StemData}``.
-    Raises :class:`StemSeparationUnavailable` if the token is missing or the call
-    fails, so the caller falls back to the classic render cleanly.
+    The fast path (~15-30s/track once the model is warm). Sends the track to
+    Replicate, downloads the returned stems into ``work_dir`` and returns
+    ``{name: StemData}``. Raises :class:`StemSeparationUnavailable` if the token
+    is missing or the call fails, so the caller falls back cleanly.
 
     Privacy note: this uploads the user's audio to Replicate, a third party.
     """
+    import time as _time
     import urllib.request
 
     if not os.environ.get("REPLICATE_API_TOKEN"):
@@ -877,23 +878,45 @@ def _separate_stems_replicate(src: Path, work_dir: Path):
         raise StemSeparationUnavailable(f"replicate client not installed: {exc}")
 
     model_ref = os.environ.get("REPLICATE_DEMUCS_MODEL", "ryan5453/demucs")
+    # ryan5453/demucs's architecture input is named "model" (default htdemucs,
+    # which yields the 4 stems vocals/drums/bass/other).
+    arch = os.environ.get("REPLICATE_DEMUCS_ARCH", "htdemucs")
     work_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(src, "rb") as fh:
-            output = replicate.run(model_ref, input={"audio": fh, "output_format": "wav"})
-    except Exception as exc:
-        raise StemSeparationUnavailable(f"Replicate separation failed: {exc}")
 
-    if isinstance(output, dict):
-        items = output
+    # Retry around the first call: a cold Replicate container can take a minute
+    # to boot and may transiently error before it's ready.
+    output = None
+    last_exc = None
+    for attempt in range(2):
+        try:
+            with open(src, "rb") as fh:
+                output = replicate.run(
+                    model_ref,
+                    input={"audio": fh, "model": arch, "output_format": "wav"},
+                )
+            break
+        except Exception as exc:
+            last_exc = exc
+            if on_status:
+                on_status("Warming up the GPU model — retrying…")
+            _time.sleep(6)
+    if output is None:
+        raise StemSeparationUnavailable(f"Replicate separation failed: {last_exc}")
+
+    # ryan5453/demucs returns {"stems": [{"name": "vocals", "audio": <file|url>}, ...]}.
+    # Stay tolerant of the older shapes (bare dict / list) too.
+    if isinstance(output, dict) and isinstance(output.get("stems"), list):
+        pairs = [(s.get("name", f"stem{i}"), s.get("audio")) for i, s in enumerate(output["stems"]) if isinstance(s, dict)]
+    elif isinstance(output, dict):
+        pairs = list(output.items())
     elif isinstance(output, (list, tuple)):
         names = ["vocals", "drums", "bass", "other"]
-        items = {(names[i] if i < len(names) else f"stem{i}"): v for i, v in enumerate(output)}
+        pairs = [((names[i] if i < len(names) else f"stem{i}"), v) for i, v in enumerate(output)]
     else:
         raise StemSeparationUnavailable(f"Unexpected Replicate output type: {type(output).__name__}")
 
     stems: dict = {}
-    for name, val in items.items():
+    for name, val in pairs:
         if val is None:
             continue
         dest = work_dir / f"{name}.wav"
@@ -1297,7 +1320,7 @@ def _separate_stems_any(src: Path, stem_dir: Path, set_msg=None):
     # minutes); finally local Demucs if installed.
     if os.environ.get("REPLICATE_API_TOKEN"):
         msg("Separating stems on the fast GPU cloud…")
-        return _separate_stems_replicate(src, stem_dir)
+        return _separate_stems_replicate(src, stem_dir, on_status=msg)
     if os.environ.get("HF_SPACE_ID"):
         msg("Separating on the free cloud worker — a full track takes a few minutes…")
         return _separate_stems_hf_space(src, stem_dir, on_status=msg)
