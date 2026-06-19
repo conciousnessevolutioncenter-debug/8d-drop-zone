@@ -51,3 +51,27 @@ def test_mixer_is_a_16_channel_console():
 def test_homepage_links_to_the_mixer():
     module = load_live_module()
     assert 'href="/mixer"' in module.HTML
+
+
+def test_separation_is_resilient_and_has_its_own_executor():
+    import inspect
+    module = load_live_module()
+
+    # Dedicated pool so a long separation never blocks the 8D render queue.
+    assert hasattr(module, "STEM_EXECUTOR")
+    assert module.STEM_EXECUTOR is not module.EXECUTOR
+
+    # The HF Space call takes a status callback and retries cold-starts.
+    sig = inspect.signature(module._separate_stems_hf_space)
+    assert "on_status" in sig.parameters
+    src = inspect.getsource(module._separate_stems_hf_space)
+    assert "range(3)" in src  # retry loop for a sleeping/cold worker
+
+
+def test_mixer_page_has_progress_ui():
+    module = load_live_module()
+    html = module.MIXER_HTML
+    assert 'id="progress"' in html
+    assert "function startProgress" in html
+    assert "function failProgress" in html
+    assert 'id="progRetry"' in html       # graceful retry on failure

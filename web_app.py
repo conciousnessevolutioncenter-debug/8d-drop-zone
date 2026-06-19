@@ -56,6 +56,9 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 JOBS = {}
 JOBS_LOCK = Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
+# Stem separation can take minutes on the free cloud worker; give it its own
+# pool so a long separation never blocks the 8D render queue (and vice versa).
+STEM_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 app = FastAPI(title="The 8D Engine")
 
@@ -907,7 +910,7 @@ def _separate_stems_replicate(src: Path, work_dir: Path):
     return stems
 
 
-def _separate_stems_hf_space(src: Path, work_dir: Path):
+def _separate_stems_hf_space(src: Path, work_dir: Path, on_status=None):
     """Separate stems with a free Hugging Face Space running Demucs.
 
     Calls the Space's ``/separate`` endpoint via gradio_client (no local
@@ -928,12 +931,26 @@ def _separate_stems_hf_space(src: Path, work_dir: Path):
     except Exception as exc:  # pragma: no cover - env-specific
         raise StemSeparationUnavailable(f"gradio_client not installed: {exc}")
 
+    import time as _time
+
     hf_token = os.environ.get("HF_TOKEN")
-    try:
-        client = Client(space_id, hf_token=hf_token) if hf_token else Client(space_id)
-        result = client.predict(handle_file(str(src)), api_name="/separate")
-    except Exception as exc:
-        raise StemSeparationUnavailable(f"HF Space separation failed: {exc}")
+    # Free Spaces sleep after inactivity; the first call has to cold-start the
+    # container, which can be slow or fail outright. Retry with backoff so a
+    # sleeping worker waking up doesn't surface to the user as a hard failure.
+    result = None
+    last_exc = None
+    for attempt in range(3):
+        try:
+            client = Client(space_id, hf_token=hf_token) if hf_token else Client(space_id)
+            result = client.predict(handle_file(str(src)), api_name="/separate")
+            break
+        except Exception as exc:
+            last_exc = exc
+            if on_status:
+                on_status(f"Free worker is waking up — retrying ({attempt + 2}/3)…")
+            _time.sleep(8 * (attempt + 1))
+    if result is None:
+        raise StemSeparationUnavailable(f"HF Space separation failed after retries: {last_exc}")
 
     paths = list(result) if isinstance(result, (list, tuple)) else [result]
     names = ["vocals", "drums", "bass", "other"]
@@ -1275,12 +1292,15 @@ def _separate_stems_any(src: Path, stem_dir: Path, set_msg=None):
     def msg(m):
         if set_msg:
             set_msg(m)
-    if os.environ.get("HF_SPACE_ID"):
-        msg("Separating stems on the free Demucs cloud (first run may take a minute)…")
-        return _separate_stems_hf_space(src, stem_dir)
+    # Prefer the fast GPU backend (Replicate, ~20s/track) when the user has
+    # opted in with a token; fall back to the free HF Space (CPU, a few
+    # minutes); finally local Demucs if installed.
     if os.environ.get("REPLICATE_API_TOKEN"):
-        msg("Separating stems with hosted AI (Replicate)…")
+        msg("Separating stems on the fast GPU cloud…")
         return _separate_stems_replicate(src, stem_dir)
+    if os.environ.get("HF_SPACE_ID"):
+        msg("Separating on the free cloud worker — a full track takes a few minutes…")
+        return _separate_stems_hf_space(src, stem_dir, on_status=msg)
     mode_info = available_stem_mode()
     if mode_info.get("mode") != "demucs":
         raise StemSeparationUnavailable(mode_info.get("message", "AI stem separation is unavailable on this server"))
@@ -1290,8 +1310,11 @@ def _separate_stems_any(src: Path, stem_dir: Path, set_msg=None):
 
 def _process_mixer_job(job_id: str, src: Path):
     import traceback
+    # Tell the UI which backend this is so it can set an honest time estimate.
+    fast = bool(os.environ.get("REPLICATE_API_TOKEN"))
+    engine = "gpu" if fast else ("free" if os.environ.get("HF_SPACE_ID") else "local")
     try:
-        _set_job(job_id, status="processing", message="Separating stems for the mixer…")
+        _set_job(job_id, status="processing", engine=engine, message="Starting separation…")
         stem_dir = APP_DIR / f"{job_id}_mixstems"
         stem_dir.mkdir(parents=True, exist_ok=True)
         stems = _separate_stems_any(src, stem_dir, lambda m: _set_job(job_id, message=m))
@@ -1332,7 +1355,7 @@ async def mixer_separate(file: UploadFile = File(...)):
                 raise HTTPException(status_code=413, detail=f"File is too large. Please upload tracks {MAX_UPLOAD_MB} MB or smaller.")
             f.write(chunk)
     _set_job(job_id, status="queued", message="Upload complete. Waiting for the stem worker…", input_name=file.filename)
-    EXECUTOR.submit(_process_mixer_job, job_id, src)
+    STEM_EXECUTOR.submit(_process_mixer_job, job_id, src)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing"})
 
 
@@ -1380,6 +1403,18 @@ MIXER_HTML = r"""<!doctype html>
   .btn:disabled{ opacity:.45; cursor:not-allowed; }
   #status{ margin-top:14px; color:var(--soft); font-size:12.5px; font-family:var(--mono); min-height:18px; }
   #status.err{ color:#ff8a8a; }
+  /* separation progress */
+  #progress{ display:none; margin-top:20px; }
+  .prog-time{ font-family:var(--display); font-weight:700; font-size:36px; line-height:1; letter-spacing:-.02em; }
+  .prog-time .u{ font-size:13px; color:var(--soft); font-weight:500; margin-left:8px; letter-spacing:.04em; }
+  .prog-msg{ margin-top:10px; color:#cdd6e6; font-size:13px; font-family:var(--mono); }
+  .prog-msg.prog-err{ color:#ff8a8a; }
+  .prog-bar{ margin-top:14px; height:9px; border-radius:6px; background:rgba(255,255,255,.08); overflow:hidden; position:relative; }
+  .prog-bar > i{ position:absolute; inset:0 auto 0 0; width:0%; border-radius:6px; background:linear-gradient(90deg,var(--cyan),var(--violet)); transition:width .35s ease; }
+  .prog-bar.shimmer::after{ content:''; position:absolute; inset:0; background:linear-gradient(90deg,transparent,rgba(255,255,255,.16),transparent); transform:translateX(-100%); animation:sh 1.7s infinite; }
+  @keyframes sh{ to{ transform:translateX(120%); } }
+  .prog-note{ margin-top:12px; color:var(--soft); font-size:12px; line-height:1.5; }
+  #progRetry{ display:none; margin-top:14px; }
   /* transport */
   .transport{ display:none; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:18px; }
   .play{ width:46px; height:46px; border-radius:50%; border:none; cursor:pointer; font-size:17px; color:#06101c;
@@ -1442,6 +1477,13 @@ MIXER_HTML = r"""<!doctype html>
         <input type="file" id="file" accept="audio/*" style="display:none"/>
       </div>
       <div id="status"></div>
+      <div id="progress">
+        <div class="prog-time" id="progTime">0:00<span class="u">elapsed</span></div>
+        <div class="prog-msg" id="progMsg">Uploading&hellip;</div>
+        <div class="prog-bar shimmer"><i id="progFill"></i></div>
+        <div class="prog-note" id="progNote"></div>
+        <button class="btn ghost" id="progRetry" type="button">Try another track</button>
+      </div>
     </div>
 
     <div class="transport" id="transport">
@@ -1482,34 +1524,80 @@ drop.onclick = () => fileIn.click();
 drop.addEventListener('drop', ev => { if (ev.dataTransfer.files[0]) separate(ev.dataTransfer.files[0]); });
 fileIn.onchange = () => { if (fileIn.files[0]) separate(fileIn.files[0]); };
 
+// ── Separation progress (honest, never-frozen UX) ──────────────────────────────
+let progTimer = null, progStart = 0, progEst = 230;
+function startProgress(msg, engine){
+  $('drop').style.display = 'none';
+  $('status').textContent = ''; $('status').classList.remove('err');
+  $('progress').style.display = 'block';
+  $('progRetry').style.display = 'none';
+  $('progMsg').classList.remove('prog-err');
+  document.querySelector('.prog-bar').classList.add('shimmer');
+  $('progMsg').textContent = msg;
+  setEstimate(engine);
+  progStart = Date.now();
+  $('progFill').style.width = '2%';
+  $('progNote').textContent = 'Leave this tab open — the stems drop straight into the mixer when it finishes.';
+  clearInterval(progTimer);
+  progTimer = setInterval(tickProgress, 250);
+}
+function setEstimate(engine){
+  if (engine === 'gpu') progEst = 35;
+  else if (engine === 'free') progEst = 230;
+  else if (engine === 'local') progEst = 120;
+}
+function tickProgress(){
+  const el = (Date.now() - progStart) / 1000;
+  $('progTime').innerHTML = fmt(el) + '<span class="u">elapsed</span>';
+  const pct = 4 + 88 * (1 - Math.exp(-el / (progEst / 2.2)));   // eases toward ~92%, never stalls at 0
+  $('progFill').style.width = Math.min(92, pct).toFixed(1) + '%';
+}
+function setProgMsg(m){ if (m) $('progMsg').textContent = m; }
+function completeProgress(){
+  clearInterval(progTimer);
+  document.querySelector('.prog-bar').classList.remove('shimmer');
+  $('progFill').style.width = '100%';
+  $('progMsg').textContent = 'Done — loading the mixer…';
+}
+function failProgress(text){
+  clearInterval(progTimer);
+  document.querySelector('.prog-bar').classList.remove('shimmer');
+  $('progMsg').classList.add('prog-err'); $('progMsg').textContent = text;
+  $('progFill').style.width = '0%'; $('progNote').textContent = '';
+  $('progRetry').style.display = 'inline-block';
+}
+$('progRetry').onclick = () => { $('progress').style.display = 'none'; $('drop').style.display = 'block'; fileIn.value = ''; fileIn.click(); };
+
 async function separate(file){
-  setStatus('Uploading ' + file.name + ' ...');
+  startProgress('Uploading ' + file.name + '…', 'unknown');
   const fd = new FormData(); fd.append('file', file);
   let res;
   try { res = await fetch(API + '/mixer/separate', { method:'POST', body:fd }); }
-  catch(e){ return setStatus('Upload failed: ' + e.message, true); }
-  if (!res.ok){ const t = await res.text(); return setStatus('Server error: ' + t, true); }
+  catch(e){ return failProgress('Upload failed: ' + e.message); }
+  if (!res.ok){ let t; try { t = await res.text(); } catch(e){ t = res.status; } return failProgress('Server error: ' + t); }
   const { job_id } = await res.json();
-  setStatus('Separating stems... this can take a minute on the free cloud worker.');
+  setProgMsg('Queued — starting the separation worker…');
   pollSeparation(job_id);
 }
 
 async function pollSeparation(jobId){
-  for (let i=0;i<600;i++){
+  let seenEngine = false;
+  for (let i=0;i<900;i++){
     let job;
     try { job = await (await fetch(API + '/jobs/' + jobId)).json(); } catch(e){ await wait(2000); continue; }
-    if (job.message) setStatus(job.message);
-    if (job.status === 'complete'){ await loadStems(job.stems || []); return; }
-    if (job.status === 'failed'){ return setStatus(job.message + ' ' + (job.error||''), true); }
+    if (job.engine && !seenEngine){ setEstimate(job.engine); seenEngine = true; }
+    if (job.message) setProgMsg(job.message);
+    if (job.status === 'complete'){ completeProgress(); await loadStems(job.stems || []); return; }
+    if (job.status === 'failed'){ return failProgress((job.message || 'Separation failed') + (job.error ? ' — ' + job.error : '')); }
     await wait(2000);
   }
-  setStatus('Timed out waiting for stem separation.', true);
+  failProgress('Timed out waiting for separation. The free worker may be busy — try again.');
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 async function loadStems(stems){
-  if (!stems.length) return setStatus('No stems were returned.', true);
-  setStatus('Loading ' + stems.length + ' stems into the mixer...');
+  if (!stems.length) return failProgress('No stems were returned.');
+  setProgMsg('Loading ' + stems.length + ' stems into the mixer…');
   ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
   const decoded = [];
   for (const st of stems){
@@ -1518,7 +1606,7 @@ async function loadStems(stems){
       decoded.push({ name: st.name, buffer: await ctx.decodeAudioData(ab) });
     } catch(e){ /* skip a bad stem rather than abort the whole mix */ }
   }
-  if (!decoded.length) return setStatus('Could not decode the separated stems.', true);
+  if (!decoded.length) return failProgress('Could not decode the separated stems.');
   buildMixer(decoded);
   setStatus('');
   $('uploadCard').style.display = 'none';
