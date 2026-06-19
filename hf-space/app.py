@@ -21,8 +21,12 @@ def separate(audio_path):
         raise gr.Error("No audio file was provided.")
     out_root = Path(tempfile.mkdtemp())
     # Demucs CLI. --segment keeps peak RAM modest; htdemucs (a Transformer model)
-    # caps the segment at 7.8 s, so 7 is the largest safe value.
-    cmd = [sys.executable, "-m", "demucs", "-n", MODEL, "--segment", "7", "-o", str(out_root), str(audio_path)]
+    # caps the segment at 7.8 s, so 7 is the largest safe value. -j runs the
+    # segments across all CPU cores, which roughly halves wall-time on the free
+    # 2-vCPU tier and keeps full-length songs from timing out the request.
+    jobs = max(1, os.cpu_count() or 1)
+    cmd = [sys.executable, "-m", "demucs", "-n", MODEL, "--segment", "7",
+           "-j", str(jobs), "-o", str(out_root), str(audio_path)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise gr.Error((proc.stderr or proc.stdout or "Demucs failed").strip()[-800:])

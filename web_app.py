@@ -1308,27 +1308,50 @@ async def job_status(job_id: str):
 # can load them into a per-stem Web Audio mixer (fader/pan/EQ/mute/solo).
 
 def _separate_stems_any(src: Path, stem_dir: Path, set_msg=None):
-    """Separate into stems with the first available engine
-    (HF Space → Replicate → local Demucs). Returns ``{name: StemData}`` or
-    raises :class:`StemSeparationUnavailable` when none are configured/working.
+    """Separate into stems, trying every configured engine in priority order and
+    falling through on failure. Returns ``{name: StemData}`` or raises
+    :class:`StemSeparationUnavailable` when none are configured or all fail.
+
+    Order: fast GPU (Replicate, ~20s/track) → free HF Space (CPU, a few minutes)
+    → local Demucs. Chaining means a transient failure on the preferred engine
+    automatically retries on the next one instead of surfacing as a hard error.
     """
     def msg(m):
         if set_msg:
             set_msg(m)
-    # Prefer the fast GPU backend (Replicate, ~20s/track) when the user has
-    # opted in with a token; fall back to the free HF Space (CPU, a few
-    # minutes); finally local Demucs if installed.
+
+    engines = []
     if os.environ.get("REPLICATE_API_TOKEN"):
-        msg("Separating stems on the fast GPU cloud…")
-        return _separate_stems_replicate(src, stem_dir, on_status=msg)
+        engines.append(("gpu", "Separating stems on the fast GPU cloud…",
+                        lambda: _separate_stems_replicate(src, stem_dir, on_status=msg)))
     if os.environ.get("HF_SPACE_ID"):
-        msg("Separating on the free cloud worker — a full track takes a few minutes…")
-        return _separate_stems_hf_space(src, stem_dir, on_status=msg)
+        engines.append(("free", "Separating on the free cloud worker — a full track takes a few minutes…",
+                        lambda: _separate_stems_hf_space(src, stem_dir, on_status=msg)))
     mode_info = available_stem_mode()
-    if mode_info.get("mode") != "demucs":
-        raise StemSeparationUnavailable(mode_info.get("message", "AI stem separation is unavailable on this server"))
-    msg("Separating vocals, drums, bass, and instruments with AI…")
-    return separate_stems_from_file(src, work_dir=stem_dir)
+    if mode_info.get("mode") == "demucs":
+        engines.append(("local", "Separating vocals, drums, bass, and instruments with AI…",
+                        lambda: separate_stems_from_file(src, work_dir=stem_dir)))
+
+    if not engines:
+        raise StemSeparationUnavailable(
+            mode_info.get("message", "AI stem separation is unavailable on this server")
+        )
+
+    last_exc = None
+    for i, (_engine, banner, run) in enumerate(engines):
+        msg(banner)
+        try:
+            stems = run()
+            if stems:
+                return stems
+            last_exc = StemSeparationUnavailable("engine returned no stems")
+        except StemSeparationUnavailable as exc:
+            last_exc = exc
+        except Exception as exc:  # pragma: no cover - env-specific
+            last_exc = exc
+        if i + 1 < len(engines):
+            msg("That separator was unavailable — trying the next one…")
+    raise StemSeparationUnavailable(f"All separation engines failed: {last_exc}")
 
 
 def _process_mixer_job(job_id: str, src: Path):
@@ -1396,86 +1419,151 @@ MIXER_HTML = r"""<!doctype html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root{ --bg:#06101c; --panel:rgba(13,20,38,.55); --hair:rgba(255,255,255,.12); --hair2:rgba(255,255,255,.22);
-    --cyan:#62e0ff; --violet:#9d8bff; --soft:#8a93a8; --text:#e7edf6;
+  :root{ --bg:#080b11; --ink:#e7edf6; --soft:#7d8aa0; --soft2:#566173; --hair2:rgba(255,255,255,.18);
+    --cyan:#48e3ff; --violet:#9d8bff; --amber:#ffd23f; --red:#ff5b5b; --green:#46e08a;
     --mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-    --display:'Space Grotesk', system-ui, sans-serif; }
+    --display:'Space Grotesk', system-ui, sans-serif;
+    --panel-top:#1a2030; --panel-bot:#0d121b; }
   *{ box-sizing:border-box; }
-  body{ margin:0; background:radial-gradient(1200px 700px at 70% -10%, #11203c 0%, #06101c 55%, #050a14 100%);
-    color:var(--text); font-family:Inter, system-ui, -apple-system, Segoe UI, sans-serif; min-height:100vh; }
+  body{ margin:0; min-height:100vh; color:var(--ink);
+    font-family:Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+    background:
+      radial-gradient(1100px 600px at 50% -12%, #16213a 0%, rgba(8,11,17,0) 62%),
+      linear-gradient(180deg,#080b11,#05070b);
+    background-attachment:fixed; }
+  body::before{ content:''; position:fixed; inset:0; pointer-events:none; opacity:.5; z-index:0;
+    background-image:radial-gradient(rgba(255,255,255,.035) 1px, transparent 1px); background-size:22px 22px;
+    -webkit-mask:radial-gradient(1100px 700px at 50% 0%, #000 0%, transparent 75%); mask:radial-gradient(1100px 700px at 50% 0%, #000 0%, transparent 75%); }
   a{ color:inherit; }
-  .shell{ max-width:1280px; margin:0 auto; padding:22px 22px 80px; }
-  nav{ display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; }
+  .shell{ position:relative; z-index:1; max-width:1320px; margin:0 auto; padding:22px 22px 90px; }
+  nav{ display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; }
   .brand{ display:flex; align-items:center; gap:10px; text-decoration:none; }
   .brand .mark{ color:var(--cyan); font-size:20px; }
   .brand .word{ font-family:var(--display); font-weight:700; letter-spacing:.16em; font-size:13px; }
   .navbtn{ font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
-    color:#9fb0c8; border:1px solid var(--hair2); border-radius:999px; padding:8px 15px; text-decoration:none; }
+    color:#9fb0c8; border:1px solid var(--hair2); border-radius:8px; padding:8px 15px; text-decoration:none; }
+  .eyebrow{ font-family:var(--mono); font-size:10.5px; letter-spacing:.28em; text-transform:uppercase; color:var(--cyan); margin-bottom:10px; }
   h1{ font-family:var(--display); font-weight:700; font-size:30px; margin:0 0 6px; letter-spacing:-.01em; }
-  .lede{ color:var(--soft); max-width:680px; margin:0 0 24px; line-height:1.5; font-size:14px; }
+  .lede{ color:var(--soft); max-width:700px; margin:0 0 24px; line-height:1.55; font-size:13.5px; }
   .grad{ background:linear-gradient(135deg,var(--cyan),var(--violet)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .card{ border:1px solid var(--hair); border-radius:18px; background:var(--panel); padding:22px; }
-  .drop{ border:1.5px dashed var(--hair2); border-radius:16px; padding:34px; text-align:center; cursor:pointer; transition:border-color .2s, background .2s; }
-  .drop:hover, .drop.drag{ border-color:var(--cyan); background:rgba(98,224,255,.05); }
+  /* upload card */
+  .card{ border:1px solid #05080d; border-radius:16px; padding:22px; box-shadow:0 30px 60px rgba(0,0,0,.45);
+    background:linear-gradient(180deg,var(--panel-top),var(--panel-bot)); }
+  .drop{ border:1.5px dashed #2a3344; border-radius:12px; padding:36px; text-align:center; cursor:pointer;
+    background:linear-gradient(180deg,#0e131d,#0a0e16); transition:border-color .2s, box-shadow .2s; }
+  .drop:hover, .drop.drag{ border-color:var(--cyan); box-shadow:inset 0 0 26px rgba(72,227,255,.12); }
   .drop h3{ font-family:var(--display); margin:8px 0 4px; font-size:16px; }
   .drop p{ color:var(--soft); font-size:12.5px; margin:0; }
-  .btn{ cursor:pointer; border:none; border-radius:999px; padding:10px 18px; font-family:var(--mono);
-    font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#06101c;
-    background:linear-gradient(135deg,var(--cyan),var(--violet)); }
-  .btn.ghost{ background:transparent; color:#9fb0c8; border:1px solid var(--hair2); }
+  .btn{ cursor:pointer; border:1px solid #05080d; border-radius:8px; padding:10px 16px; font-family:var(--mono);
+    font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:#cdd6e6;
+    background:linear-gradient(180deg,#1d2636,#121826); box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 2px 4px rgba(0,0,0,.5); }
+  .btn.primary{ color:#04141a; border-color:transparent; background:linear-gradient(180deg,#7fe9ff,#36b6e0);
+    box-shadow:0 0 16px rgba(72,227,255,.3), inset 0 1px 0 rgba(255,255,255,.35); }
+  .btn.ghost{ background:transparent; color:#9fb0c8; border:1px solid var(--hair2); box-shadow:none; }
   .btn:disabled{ opacity:.45; cursor:not-allowed; }
   #status{ margin-top:14px; color:var(--soft); font-size:12.5px; font-family:var(--mono); min-height:18px; }
-  #status.err{ color:#ff8a8a; }
+  #status.err{ color:var(--red); }
   /* separation progress */
   #progress{ display:none; margin-top:20px; }
-  .prog-time{ font-family:var(--display); font-weight:700; font-size:36px; line-height:1; letter-spacing:-.02em; }
-  .prog-time .u{ font-size:13px; color:var(--soft); font-weight:500; margin-left:8px; letter-spacing:.04em; }
-  .prog-msg{ margin-top:10px; color:#cdd6e6; font-size:13px; font-family:var(--mono); }
-  .prog-msg.prog-err{ color:#ff8a8a; }
-  .prog-bar{ margin-top:14px; height:9px; border-radius:6px; background:rgba(255,255,255,.08); overflow:hidden; position:relative; }
-  .prog-bar > i{ position:absolute; inset:0 auto 0 0; width:0%; border-radius:6px; background:linear-gradient(90deg,var(--cyan),var(--violet)); transition:width .35s ease; }
+  .prog-time{ font-family:var(--mono); font-weight:700; font-size:38px; line-height:1; letter-spacing:.01em;
+    color:#6effc8; text-shadow:0 0 14px rgba(110,255,200,.4); }
+  .prog-time .u{ font-size:12px; color:var(--soft); font-weight:500; margin-left:10px; letter-spacing:.14em; text-shadow:none; }
+  .prog-msg{ margin-top:12px; color:#cdd6e6; font-size:13px; font-family:var(--mono); }
+  .prog-msg.prog-err{ color:var(--red); }
+  .prog-bar{ margin-top:14px; height:9px; border-radius:6px; background:#0a0e16; overflow:hidden; position:relative; box-shadow:inset 0 2px 5px rgba(0,0,0,.8); }
+  .prog-bar > i{ position:absolute; inset:0 auto 0 0; width:0%; border-radius:6px; background:linear-gradient(90deg,var(--cyan),var(--violet)); transition:width .35s ease; box-shadow:0 0 10px rgba(72,227,255,.5); }
   .prog-bar.shimmer::after{ content:''; position:absolute; inset:0; background:linear-gradient(90deg,transparent,rgba(255,255,255,.16),transparent); transform:translateX(-100%); animation:sh 1.7s infinite; }
   @keyframes sh{ to{ transform:translateX(120%); } }
   .prog-note{ margin-top:12px; color:var(--soft); font-size:12px; line-height:1.5; }
   #progRetry{ display:none; margin-top:14px; }
+
+  /* ── the rack ─────────────────────────────────────────────────── */
+  .console{ display:none; position:relative; border-radius:14px; overflow:hidden; border:1px solid #000;
+    background:linear-gradient(180deg,var(--panel-top),var(--panel-bot));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 34px 70px rgba(0,0,0,.5); }
+  .console::before, .console::after{ content:''; position:absolute; top:15px; width:9px; height:9px; border-radius:50%; z-index:3;
+    background:radial-gradient(circle at 40% 35%, #4a5468, #11151d 70%); box-shadow:inset 0 1px 1px rgba(255,255,255,.3), 0 1px 1px rgba(0,0,0,.6); }
+  .console::before{ left:15px; } .console::after{ right:15px; }
+  .rackhead{ display:flex; align-items:center; justify-content:space-between; padding:13px 40px; border-bottom:1px solid #000;
+    background:linear-gradient(180deg,#222a3a,#161c28); }
+  .rh-left{ font:700 12px var(--display); letter-spacing:.24em; color:#dbe3f0; display:flex; align-items:center; gap:11px; }
+  .rh-sub{ color:var(--soft); font:600 10px var(--mono); letter-spacing:.18em; }
+  .rh-right{ font:600 10px var(--mono); color:var(--soft); letter-spacing:.14em; }
+  .led-on{ width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 9px var(--green); animation:pulse 2.4s infinite; }
+  @keyframes pulse{ 0%,100%{ opacity:1 } 50%{ opacity:.45 } }
   /* transport */
-  .transport{ display:none; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:18px; }
-  .play{ width:46px; height:46px; border-radius:50%; border:none; cursor:pointer; font-size:17px; color:#06101c;
-    background:linear-gradient(135deg,var(--cyan),var(--violet)); }
-  .tcode{ font-family:var(--mono); font-size:13px; color:#9fb0c8; min-width:96px; }
-  .master{ display:flex; align-items:center; gap:8px; margin-left:auto; }
-  .master label{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--soft); }
+  .transport{ display:none; align-items:center; gap:14px; padding:14px 18px; border-bottom:1px solid #000;
+    background:linear-gradient(180deg,#141a26,#0e131d); }
+  .play{ width:44px; height:44px; border-radius:50%; border:1px solid #05080d; cursor:pointer; font-size:15px; color:#04141a;
+    background:radial-gradient(circle at 50% 35%, #8aecff, #2bb6e0); box-shadow:0 0 14px rgba(72,227,255,.4), inset 0 1px 0 rgba(255,255,255,.4); }
+  .tbtn{ cursor:pointer; border:1px solid #05080d; border-radius:7px; padding:9px 14px; font:700 10px var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:#cdd6e6; background:linear-gradient(180deg,#1d2636,#121826); box-shadow:inset 0 1px 0 rgba(255,255,255,.06); }
+  .tcode{ font:600 13px var(--mono); color:#6effc8; background:#04120c; padding:8px 13px; border-radius:6px; letter-spacing:.1em;
+    box-shadow:inset 0 2px 6px rgba(0,0,0,.85), 0 0 0 1px #0a0e15; text-shadow:0 0 8px rgba(110,255,200,.45); }
+  .master{ display:flex; align-items:center; gap:12px; margin-left:auto; }
+  .mlab{ font:600 9px var(--mono); letter-spacing:.18em; text-transform:uppercase; color:var(--soft); }
   /* mixer */
-  #mixer{ display:none; gap:14px; overflow-x:auto; padding-bottom:8px; }
-  .strip{ flex:0 0 144px; min-height:374px; position:relative; border:1px solid var(--hair); border-radius:16px;
-    background:linear-gradient(180deg,rgba(13,20,38,.6),rgba(7,11,22,.4));
-    padding:14px 12px; display:flex; flex-direction:column; align-items:center; gap:10px; }
-  .strip .name{ font-family:var(--display); font-weight:600; font-size:13px; text-transform:capitalize; text-align:center; line-height:1.15; }
-  .chnum{ font-family:var(--mono); font-size:9px; letter-spacing:.16em; color:var(--soft); }
-  .strip.empty{ border-style:dashed; justify-content:center; gap:16px; }
-  .strip.empty .meter, .strip.empty .eq, .strip.empty .panrow, .strip.empty .fader, .strip.empty .gaindb, .strip.empty .ms{ display:none; }
+  #mixer{ display:none; gap:0; overflow-x:auto; padding:0; }
+  .strip{ flex:0 0 132px; min-height:438px; position:relative; padding:13px 11px 15px; display:flex; flex-direction:column;
+    align-items:center; gap:12px; border-right:1px solid #05080d;
+    background:linear-gradient(180deg,#171e2b 0%, #0f141e 100%); box-shadow:inset 1px 0 0 rgba(255,255,255,.03); }
+  .plate{ width:100%; display:flex; align-items:center; justify-content:space-between; }
+  .cn{ font:700 9px var(--mono); letter-spacing:.16em; color:var(--soft); }
+  .dot{ width:6px; height:6px; border-radius:50%; background:#2a3344; box-shadow:inset 0 0 2px #000; }
+  .strip:not(.empty) .dot{ background:var(--cyan); box-shadow:0 0 7px var(--cyan); }
+  .name{ width:100%; text-align:center; font:600 12px var(--display); color:#dfe7f3; text-transform:capitalize; letter-spacing:.01em;
+    background:linear-gradient(180deg,#0c111a,#0a0e16); border:1px solid #05080d; border-radius:5px; padding:5px 4px;
+    box-shadow:inset 0 1px 3px rgba(0,0,0,.7); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .eqrow{ width:100%; display:flex; justify-content:space-between; }
+  .panmount{ display:flex; justify-content:center; }
+  .metcol{ display:flex; gap:11px; align-items:center; justify-content:center; }
+  .gaindb{ font:600 10px var(--mono); color:#bcc7da; background:#0a0e16; border-radius:4px; padding:3px 8px; box-shadow:inset 0 1px 3px rgba(0,0,0,.7); }
+  .ms{ display:flex; gap:8px; }
+  .ms button{ width:34px; height:24px; border-radius:5px; border:1px solid #05080d; cursor:pointer; font:700 10px var(--mono); color:var(--soft);
+    background:linear-gradient(180deg,#1c2433,#10151f); box-shadow:inset 0 1px 0 rgba(255,255,255,.06), 0 1px 2px rgba(0,0,0,.5); }
+  .ms button.on.m{ color:#1a0606; border-color:transparent; background:linear-gradient(180deg,#ff7b7b,#e23b3b); box-shadow:0 0 11px rgba(255,91,91,.6), inset 0 1px 0 rgba(255,255,255,.3); }
+  .ms button.on.s{ color:#04141a; border-color:transparent; background:linear-gradient(180deg,#7fe9ff,#28b6e0); box-shadow:0 0 11px rgba(72,227,255,.6), inset 0 1px 0 rgba(255,255,255,.3); }
   .loadbtn{ display:none; }
-  .strip.empty .loadbtn{ display:inline-block; cursor:pointer; border:1px solid var(--hair2); background:transparent;
-    color:#9fb0c8; border-radius:9px; padding:9px 12px; font-family:var(--mono); font-size:10px; letter-spacing:.06em; }
-  .strip.empty .loadbtn:hover{ border-color:var(--cyan); color:var(--cyan); }
-  .meter{ width:100%; height:8px; border-radius:6px; background:rgba(255,255,255,.07); overflow:hidden; }
-  .meter > i{ display:block; height:100%; width:0%; background:linear-gradient(90deg,#36d399,#e3d24a 70%,#ff6b6b); transition:width .05s linear; }
-  .eq{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; width:100%; }
-  .eq .knob{ display:flex; flex-direction:column; align-items:center; gap:3px; }
-  .eq .knob span{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em; color:var(--soft); }
-  .eq input{ width:100%; }
-  .panrow{ width:100%; display:flex; flex-direction:column; align-items:center; gap:3px; }
-  .panrow span{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em; color:var(--soft); }
-  .fader{ -webkit-appearance:slider-vertical; writing-mode:vertical-lr; direction:rtl; width:30px; height:130px; }
-  .gaindb{ font-family:var(--mono); font-size:10px; color:#9fb0c8; }
-  .ms{ display:flex; gap:6px; }
-  .ms button{ cursor:pointer; width:30px; height:26px; border-radius:7px; border:1px solid var(--hair2);
-    background:transparent; color:var(--soft); font-family:var(--mono); font-size:11px; font-weight:600; }
-  .ms button.on.m{ background:#ff6b6b; color:#160606; border-color:transparent; }
-  .ms button.on.s{ background:var(--cyan); color:#06101c; border-color:transparent; }
-  input[type=range]{ accent-color:var(--cyan); }
-  .actions{ display:none; gap:12px; margin-top:20px; flex-wrap:wrap; }
-  .hint{ color:var(--soft); font-size:12px; margin-top:10px; }
+  .strip.empty{ background:linear-gradient(180deg,#10151e,#0b0f17); }
+  .strip.empty .name, .strip.empty .eqrow, .strip.empty .panmount, .strip.empty .metcol, .strip.empty .gaindb, .strip.empty .ms{ display:none; }
+  .strip.empty .loadbtn{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; margin:auto 0; cursor:pointer;
+    width:86px; height:86px; border-radius:50%; color:var(--soft); font:600 9px var(--mono); letter-spacing:.14em;
+    background:radial-gradient(circle at 50% 38%, #161d29, #0c111a); border:1px dashed #2a3344; }
+  .strip.empty .loadbtn .pl{ font-size:24px; line-height:1; font-weight:300; }
+  .strip.empty .loadbtn:hover{ color:var(--cyan); border-color:var(--cyan); box-shadow:0 0 18px rgba(72,227,255,.15); }
+  /* knob widget */
+  .knob{ display:flex; flex-direction:column; align-items:center; gap:3px; user-select:none; }
+  .kwrap{ --n:0; position:relative; width:42px; height:42px; }
+  .arc{ position:absolute; inset:0; border-radius:50%;
+    background:conic-gradient(from 225deg, var(--cyan) calc(var(--n) * 270deg), rgba(255,255,255,.06) 0deg 270deg, transparent 270deg);
+    -webkit-mask:radial-gradient(circle, transparent 15px, #000 16px); mask:radial-gradient(circle, transparent 15px, #000 16px); filter:drop-shadow(0 0 3px rgba(72,227,255,.4)); }
+  .dial{ --a:0deg; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:34px; height:34px; border-radius:50%; cursor:ns-resize;
+    background:radial-gradient(circle at 50% 35%, #39455c 0%, #1b2230 56%, #10151f 100%);
+    box-shadow:inset 0 1.5px 1px rgba(255,255,255,.14), inset 0 -3px 5px rgba(0,0,0,.7), 0 2px 5px rgba(0,0,0,.55); border:1px solid #0a0e15; }
+  .ind{ position:absolute; left:50%; top:3px; width:2.5px; height:11px; border-radius:2px; background:var(--cyan);
+    box-shadow:0 0 7px var(--cyan); transform:translateX(-50%) rotate(var(--a)); transform-origin:50% 14px; }
+  .knob.act .ind{ background:#c8f6ff; box-shadow:0 0 10px var(--cyan); }
+  .klab{ font:600 8px var(--mono); letter-spacing:.14em; color:var(--soft); }
+  .kval{ font:600 9px var(--mono); color:#d6def0; min-height:11px; }
+  /* fader widget */
+  .fader{ height:150px; display:flex; align-items:center; justify-content:center; }
+  .ftrack{ position:relative; width:9px; height:100%; border-radius:5px; cursor:ns-resize;
+    background:linear-gradient(180deg,#0b0f17,#161d29); box-shadow:inset 0 0 0 1px #0a0e15, inset 0 2px 6px rgba(0,0,0,.85); }
+  .ffill{ position:absolute; left:0; right:0; bottom:0; height:0%; border-radius:5px; background:linear-gradient(180deg,var(--cyan),#2b7fae); opacity:.45; }
+  .fcap{ position:absolute; left:50%; transform:translateX(-50%); width:30px; height:15px; bottom:0; border-radius:4px;
+    background:linear-gradient(180deg,#3a465c,#1a212e); border:1px solid #0a0e15; box-shadow:0 2px 4px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.22); }
+  .fcap::after{ content:''; position:absolute; left:5px; right:5px; top:50%; height:2px; transform:translateY(-50%); border-radius:2px; background:var(--cyan); box-shadow:0 0 6px var(--cyan); }
+  /* led meter */
+  .led{ position:relative; width:9px; height:150px; border-radius:3px; overflow:hidden;
+    background:#0a0e16; box-shadow:inset 0 0 0 1px #0a0e15, inset 0 2px 6px rgba(0,0,0,.85); }
+  .ledfill{ position:absolute; left:0; right:0; bottom:0; height:0%; transition:height .05s linear;
+    background:linear-gradient(180deg,#ff5b5b 0%, #ffd23f 22%, #46e08a 52%, #2bd07a 100%); }
+  .ledfill::after{ content:''; position:absolute; inset:0; background:repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.6) 3px 4px); }
+  /* actions */
+  .actions{ display:none; gap:12px; padding:14px 18px; border-top:1px solid #000; align-items:center; flex-wrap:wrap;
+    background:linear-gradient(180deg,#141a26,#0e131d); }
+  .constat{ font:600 11px var(--mono); color:var(--soft); margin-left:auto; }
+  .constat.err{ color:var(--red); }
   .result{ margin-top:14px; font-size:13px; }
   .result a{ color:var(--cyan); }
 </style>
@@ -1487,6 +1575,7 @@ MIXER_HTML = r"""<!doctype html>
       <a class="navbtn" href="/">&larr; Back to mastering</a>
     </nav>
 
+    <div class="eyebrow">8D ENGINE &middot; MIX LAB</div>
     <h1>Multitrack <span class="grad">mixer</span></h1>
     <p class="lede">A 16-channel console. Drop a finished track and the engine splits it into vocals, drums, bass and
       instruments across the first channels &mdash; then load your own tracks, stems or overdubs into any of the remaining
@@ -1509,21 +1598,26 @@ MIXER_HTML = r"""<!doctype html>
       </div>
     </div>
 
-    <div class="transport" id="transport">
-      <button class="play" id="play" title="Play / pause">&#9658;</button>
-      <button class="btn ghost" id="stop">Stop</button>
-      <span class="tcode" id="tcode">0:00 / 0:00</span>
-      <div class="master">
-        <label>Master</label>
-        <input type="range" id="masterFader" min="0" max="1.4" step="0.01" value="1"/>
+    <div class="console" id="console">
+      <div class="rackhead">
+        <div class="rh-left"><span class="led-on"></span> MIX&nbsp;LAB <span class="rh-sub">// 16-CHANNEL</span></div>
+        <div class="rh-right" id="rhMeta">DEMUCS · 4-STEM · 32-BIT FLOAT</div>
       </div>
-    </div>
-
-    <div id="mixer"></div>
-
-    <div class="actions" id="actions">
-      <button class="btn" id="mixdown">&#11015; Download mixdown (WAV)</button>
-      <button class="btn ghost" id="to8d">Send mix to the 8D engine &rarr;</button>
+      <div class="transport" id="transport">
+        <button class="play" id="play" title="Play / pause">&#9658;</button>
+        <button class="tbtn" id="stop">Stop</button>
+        <span class="tcode" id="tcode">0:00 / 0:00</span>
+        <div class="master">
+          <span class="mlab">Master</span>
+          <div id="masterMount"></div>
+        </div>
+      </div>
+      <div id="mixer"></div>
+      <div class="actions" id="actions">
+        <button class="btn primary" id="mixdown">&#11015; Download mixdown (WAV)</button>
+        <button class="btn" id="to8d">Send mix to the 8D engine &rarr;</button>
+        <span class="constat" id="constat"></span>
+      </div>
     </div>
     <div class="result" id="result"></div>
   </div>
@@ -1539,7 +1633,12 @@ let ctx = null, channels = [], duration = 0;
 let playing = false, startedAt = 0, offset = 0, sources = [], rafId = 0, meterRaf = 0;
 
 function setStatus(msg, err){ statusEl.textContent = msg || ''; statusEl.classList.toggle('err', !!err); }
+function cstat(msg, err){ const e = $('constat'); if (!e) return; e.textContent = msg || ''; e.classList.toggle('err', !!err); }
 const fmt = s => { s = Math.max(0, s|0); return (s/60|0)+':'+String(s%60).padStart(2,'0'); };
+const two = n => String(n).padStart(2,'0');
+const dbFmt = v => (v>0?'+':'') + v.toFixed(1);
+const panFmt = v => { const p = Math.round(v*100); return p===0 ? 'C' : (p<0 ? ('L'+(-p)) : ('R'+p)); };
+const gainDb = v => v<=0 ? '-∞ dB' : ((20*Math.log10(v)>=0?'+':'') + (20*Math.log10(v)).toFixed(1) + ' dB');
 
 drop.onclick = () => fileIn.click();
 ['dragover','dragenter'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('drag'); }));
@@ -1635,8 +1734,55 @@ async function loadStems(stems){
   $('uploadCard').style.display = 'none';
 }
 
+// ── Pro widgets: rotary knob (drag/scroll/double-click) + console fader ─────────
+function makeKnob(opt){
+  const min=opt.min, max=opt.max, range=max-min, SWEEP=270;
+  let value = opt.value!=null ? opt.value : min;
+  const el = document.createElement('div'); el.className='knob';
+  el.innerHTML = '<div class="kwrap"><div class="arc"></div><div class="dial"><span class="ind"></span></div></div>'
+    + '<div class="klab">'+opt.label+'</div><div class="kval"></div>';
+  const wrap = el.querySelector('.kwrap'), dial = el.querySelector('.dial'), kval = el.querySelector('.kval');
+  function render(){
+    const n = range ? (value-min)/range : 0;
+    wrap.style.setProperty('--n', n.toFixed(3));
+    dial.style.setProperty('--a', (-SWEEP/2 + n*SWEEP).toFixed(1)+'deg');
+    kval.textContent = opt.fmt ? opt.fmt(value) : value.toFixed(1);
+  }
+  function set(v, fire){ value = Math.max(min, Math.min(max, v)); render(); if (fire && opt.onChange) opt.onChange(value); }
+  let drag=false, sy=0, sv=0;
+  dial.addEventListener('pointerdown', e=>{ drag=true; sy=e.clientY; sv=value; dial.setPointerCapture(e.pointerId); el.classList.add('act'); e.preventDefault(); });
+  dial.addEventListener('pointermove', e=>{ if(!drag) return; set(sv + ((sy-e.clientY)/160)*range, true); });
+  const end=()=>{ drag=false; el.classList.remove('act'); };
+  dial.addEventListener('pointerup', end); dial.addEventListener('pointercancel', end);
+  dial.addEventListener('dblclick', ()=> set(opt.def!=null?opt.def:(min+max)/2, true));
+  dial.addEventListener('wheel', e=>{ e.preventDefault(); set(value - Math.sign(e.deltaY)*range*0.03, true); }, {passive:false});
+  render();
+  return { el, set:v=>set(v,false), get:()=>value };
+}
+
+function makeFader(opt){
+  const min=opt.min, max=opt.max, range=max-min;
+  let value = opt.value!=null ? opt.value : min;
+  const el = document.createElement('div'); el.className='fader';
+  el.innerHTML = '<div class="ftrack"><div class="ffill"></div><div class="fcap"></div></div>';
+  const track=el.querySelector('.ftrack'), fill=el.querySelector('.ffill'), cap=el.querySelector('.fcap');
+  function render(){ const n = range?(value-min)/range:0, pct=n*100; fill.style.height=pct+'%'; cap.style.bottom='calc('+pct+'% - 8px)'; }
+  function set(v, fire){ value=Math.max(min,Math.min(max,v)); render(); if(fire&&opt.onChange) opt.onChange(value); }
+  function fromEv(e){ const r=track.getBoundingClientRect(); const n=1-(e.clientY-r.top)/r.height; set(min+Math.max(0,Math.min(1,n))*range, true); }
+  let drag=false;
+  track.addEventListener('pointerdown', e=>{ drag=true; track.setPointerCapture(e.pointerId); fromEv(e); e.preventDefault(); });
+  track.addEventListener('pointermove', e=>{ if(drag) fromEv(e); });
+  const end=()=>drag=false; track.addEventListener('pointerup', end); track.addEventListener('pointercancel', end);
+  track.addEventListener('dblclick', ()=> set(opt.def!=null?opt.def:max, true));
+  track.addEventListener('wheel', e=>{ e.preventDefault(); set(value - Math.sign(e.deltaY)*range*0.03, true); }, {passive:false});
+  render();
+  return { el, set:v=>set(v,false), get:()=>value };
+}
+
 const CHANNEL_COUNT = 16;
-let masterGain = null;
+let masterGain = null, masterVol = 1;
+const masterKnob = makeKnob({ label:'OUT', min:0, max:1.4, value:1, def:1, fmt:gainDb, onChange:v=>{ masterVol=v; if(masterGain) masterGain.gain.value=v; } });
+$('masterMount').appendChild(masterKnob.el);
 
 // buildMixer is global so it can be driven with synthetic buffers in tests.
 // It always lays out CHANNEL_COUNT strips; separated stems fill the first ones
@@ -1645,9 +1791,8 @@ function buildMixer(decoded){
   ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
   const mixerEl = $('mixer'); mixerEl.innerHTML = ''; channels = [];
   masterGain = ctx.createGain();
-  masterGain.gain.value = parseFloat($('masterFader').value);
+  masterGain.gain.value = masterVol;
   masterGain.connect(ctx.destination);
-  $('masterFader').oninput = e => { masterGain.gain.value = parseFloat(e.target.value); };
   window.__master = masterGain;
 
   for (let i = 0; i < CHANNEL_COUNT; i++){
@@ -1658,46 +1803,44 @@ function buildMixer(decoded){
   (decoded || []).forEach((d, i) => { if (i < CHANNEL_COUNT) loadIntoChannel(channels[i], d.buffer, d.name); });
 
   recalcDuration();
+  $('console').style.display = 'block';
   mixerEl.style.display = 'flex';
   $('transport').style.display = 'flex';
   $('actions').style.display = 'flex';
 }
 
-// One channel strip. Starts empty (no buffer) with a "+ Load track" button; a
-// track drops in either from stem separation or by importing a file.
+// One channel strip — a lab module. Starts empty (no buffer) with a round
+// "+ LOAD" insert pad; a track drops in from stem separation or a file import.
+function setEq(ch, band, v){ ch.eq[band] = v; if (ch[band]) ch[band].gain.value = v; }
+
 function makeChannel(i){
   const ch = { idx:i, name:'', buffer:null, vol:1, pan:0, mute:false, solo:false, eq:{lo:0,mid:0,hi:0} };
   const el = document.createElement('div'); el.className = 'strip empty';
   el.innerHTML =
-    '<div class="chnum">CH '+(i+1)+'</div>'+
+    '<div class="plate"><span class="cn">CH '+two(i+1)+'</span><span class="dot"></span></div>'+
     '<div class="name">&mdash;</div>'+
-    '<div class="meter"><i></i></div>'+
-    '<div class="eq">'+
-      '<div class="knob"><span>LO</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="lo"></div>'+
-      '<div class="knob"><span>MID</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="mid"></div>'+
-      '<div class="knob"><span>HI</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="hi"></div>'+
-    '</div>'+
-    '<div class="panrow"><span>PAN</span><input type="range" class="pan" min="-1" max="1" step="0.02" value="0"></div>'+
-    '<input type="range" class="fader" min="0" max="1.4" step="0.01" value="1">'+
-    '<div class="gaindb">0.0 dB</div>'+
+    '<div class="eqrow"></div>'+
+    '<div class="panmount"></div>'+
+    '<div class="metcol"><div class="fmount"></div><div class="led"><div class="ledfill"></div></div></div>'+
+    '<div class="gaindb">+0.0 dB</div>'+
     '<div class="ms"><button class="m" title="Mute">M</button><button class="s" title="Solo">S</button></div>'+
-    '<button class="loadbtn" type="button">&#43; Load track</button>'+
+    '<button class="loadbtn" type="button" title="Load track" aria-label="Load track"><span class="pl">&#43;</span><span>LOAD</span></button>'+
     '<input type="file" accept="audio/*" class="chfile" style="display:none">';
   ch.el = el;
   ch.nameEl = el.querySelector('.name');
-  ch.meterEl = el.querySelector('.meter > i');
+  ch.meterEl = el.querySelector('.ledfill');
   ch.gaindbEl = el.querySelector('.gaindb');
 
-  el.querySelectorAll('[data-eq]').forEach(inp => inp.oninput = e => {
-    const band = e.target.dataset.eq; ch.eq[band] = parseFloat(e.target.value);
-    if (ch[band]) ch[band].gain.value = ch.eq[band];
-  });
-  el.querySelector('.pan').oninput = e => { ch.pan = parseFloat(e.target.value); if (ch.panner) ch.panner.pan.value = ch.pan; };
-  el.querySelector('.fader').oninput = e => {
-    ch.vol = parseFloat(e.target.value);
-    ch.gaindbEl.textContent = (ch.vol<=0 ? '-inf' : (20*Math.log10(ch.vol)).toFixed(1)) + ' dB';
-    applyGains();
-  };
+  // EQ knobs (low/mid/high), pan knob, and the channel fader.
+  const lo  = makeKnob({ label:'LO',  min:-12, max:12, value:0, def:0, fmt:dbFmt, onChange:v=>setEq(ch,'lo',v) });
+  const mid = makeKnob({ label:'MID', min:-12, max:12, value:0, def:0, fmt:dbFmt, onChange:v=>setEq(ch,'mid',v) });
+  const hi  = makeKnob({ label:'HI',  min:-12, max:12, value:0, def:0, fmt:dbFmt, onChange:v=>setEq(ch,'hi',v) });
+  el.querySelector('.eqrow').append(lo.el, mid.el, hi.el);
+  const pan = makeKnob({ label:'PAN', min:-1, max:1, value:0, def:0, fmt:panFmt, onChange:v=>{ ch.pan=v; if (ch.panner) ch.panner.pan.value=v; } });
+  el.querySelector('.panmount').append(pan.el);
+  const fader = makeFader({ min:0, max:1.4, value:1, def:1, onChange:v=>{ ch.vol=v; ch.gaindbEl.textContent=gainDb(v); applyGains(); } });
+  el.querySelector('.fmount').append(fader.el);
+
   const mBtn = el.querySelector('.m'), sBtn = el.querySelector('.s');
   mBtn.onclick = () => { ch.mute = !ch.mute; mBtn.classList.toggle('on', ch.mute); applyGains(); };
   sBtn.onclick = () => { ch.solo = !ch.solo; sBtn.classList.toggle('on', ch.solo); applyGains(); };
@@ -1710,7 +1853,7 @@ function makeChannel(i){
       ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
       const buf = await ctx.decodeAudioData(await f.arrayBuffer());
       loadIntoChannel(ch, buf, f.name.replace(/\.[^.]+$/, ''));
-    } catch(e){ setStatus('Could not decode ' + f.name, true); }
+    } catch(e){ cstat('Could not decode ' + f.name, true); }
   };
   return ch;
 }
@@ -1766,7 +1909,7 @@ function meterLoop(){
     c.analyser.getByteTimeDomainData(buf);
     let sum = 0; for (let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
     const rms = Math.sqrt(sum/buf.length);
-    if (c.meterEl) c.meterEl.style.width = Math.min(100, rms*180).toFixed(0) + '%';
+    if (c.meterEl) c.meterEl.style.height = Math.min(100, rms*180).toFixed(0) + '%';
   });
   meterRaf = requestAnimationFrame(meterLoop);
 }
@@ -1781,7 +1924,7 @@ $('stop').onclick = () => stopAll();
 function stopAll(){
   stopSources(); playing = false; offset = 0;
   $('play').innerHTML = '&#9658;'; cancelAnimationFrame(rafId); cancelAnimationFrame(meterRaf);
-  channels.forEach(c => { if (c.meterEl) c.meterEl.style.width = '0%'; });
+  channels.forEach(c => { if (c.meterEl) c.meterEl.style.height = '0%'; });
   $('tcode').textContent = '0:00 / ' + fmt(duration);
 }
 
@@ -1790,7 +1933,7 @@ async function renderMix(){
   const loaded = loadedChannels();
   const sr = loaded[0].buffer.sampleRate;
   const off = new OfflineAudioContext(2, Math.ceil(duration*sr), sr);
-  const master = off.createGain(); master.gain.value = parseFloat($('masterFader').value); master.connect(off.destination);
+  const master = off.createGain(); master.gain.value = masterVol; master.connect(off.destination);
   const anySolo = loaded.some(c => c.solo);
   loaded.forEach(c => {
     const s = off.createBufferSource(); s.buffer = c.buffer;
@@ -1820,19 +1963,19 @@ function audioBufferToWav(buf){
 
 $('mixdown').onclick = async () => {
   if (!loadedChannels().length) return;
-  $('mixdown').disabled = true; setStatus('Rendering mixdown...');
+  $('mixdown').disabled = true; cstat('Rendering mixdown…');
   try {
     const blob = await renderMix();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = '8d_mixdown.wav'; a.click();
-    setStatus('Mixdown saved.');
-  } catch(e){ setStatus('Mixdown failed: ' + e.message, true); }
+    cstat('Mixdown saved.');
+  } catch(e){ cstat('Mixdown failed: ' + e.message, true); }
   $('mixdown').disabled = false;
 };
 
 $('to8d').onclick = async () => {
   if (!loadedChannels().length) return;
-  $('to8d').disabled = true; setStatus('Rendering mix, then sending it to the 8D engine...');
+  $('to8d').disabled = true; cstat('Rendering mix, then sending it to the 8D engine…');
   try {
     const blob = await renderMix();
     const fd = new FormData();
@@ -1841,19 +1984,19 @@ $('to8d').onclick = async () => {
     const res = await fetch(API + '/convert', { method:'POST', body:fd });
     if (!res.ok){ throw new Error(await res.text()); }
     const { job_id } = await res.json();
-    setStatus('8D render started...');
+    cstat('8D render started…');
     for (let i=0;i<400;i++){
       const job = await (await fetch(API + '/jobs/' + job_id)).json();
-      if (job.message) setStatus(job.message);
+      if (job.message) cstat(job.message);
       if (job.status === 'complete'){
         const u = job.download_url.startsWith('http') ? job.download_url : API + job.download_url;
         $('result').innerHTML = '<a href="'+u+'" download>&#11015; Download your 8D-spatialized mix</a>';
-        setStatus('Done.'); break;
+        cstat('Done.'); break;
       }
-      if (job.status === 'failed'){ setStatus('8D render failed: ' + (job.error||''), true); break; }
+      if (job.status === 'failed'){ cstat('8D render failed: ' + (job.error||''), true); break; }
       await wait(2000);
     }
-  } catch(e){ setStatus('Could not send to 8D: ' + e.message, true); }
+  } catch(e){ cstat('Could not send to 8D: ' + e.message, true); }
   $('to8d').disabled = false;
 };
 </script>
