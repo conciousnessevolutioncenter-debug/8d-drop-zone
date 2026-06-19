@@ -1389,9 +1389,17 @@ MIXER_HTML = r"""<!doctype html>
   .master label{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--soft); }
   /* mixer */
   #mixer{ display:none; gap:14px; overflow-x:auto; padding-bottom:8px; }
-  .strip{ flex:0 0 150px; border:1px solid var(--hair); border-radius:16px; background:linear-gradient(180deg,rgba(13,20,38,.6),rgba(7,11,22,.4));
+  .strip{ flex:0 0 144px; min-height:374px; position:relative; border:1px solid var(--hair); border-radius:16px;
+    background:linear-gradient(180deg,rgba(13,20,38,.6),rgba(7,11,22,.4));
     padding:14px 12px; display:flex; flex-direction:column; align-items:center; gap:10px; }
-  .strip .name{ font-family:var(--display); font-weight:600; font-size:13px; text-transform:capitalize; }
+  .strip .name{ font-family:var(--display); font-weight:600; font-size:13px; text-transform:capitalize; text-align:center; line-height:1.15; }
+  .chnum{ font-family:var(--mono); font-size:9px; letter-spacing:.16em; color:var(--soft); }
+  .strip.empty{ border-style:dashed; justify-content:center; gap:16px; }
+  .strip.empty .meter, .strip.empty .eq, .strip.empty .panrow, .strip.empty .fader, .strip.empty .gaindb, .strip.empty .ms{ display:none; }
+  .loadbtn{ display:none; }
+  .strip.empty .loadbtn{ display:inline-block; cursor:pointer; border:1px solid var(--hair2); background:transparent;
+    color:#9fb0c8; border-radius:9px; padding:9px 12px; font-family:var(--mono); font-size:10px; letter-spacing:.06em; }
+  .strip.empty .loadbtn:hover{ border-color:var(--cyan); color:var(--cyan); }
   .meter{ width:100%; height:8px; border-radius:6px; background:rgba(255,255,255,.07); overflow:hidden; }
   .meter > i{ display:block; height:100%; width:0%; background:linear-gradient(90deg,#36d399,#e3d24a 70%,#ff6b6b); transition:width .05s linear; }
   .eq{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; width:100%; }
@@ -1422,8 +1430,9 @@ MIXER_HTML = r"""<!doctype html>
     </nav>
 
     <h1>Multitrack <span class="grad">mixer</span></h1>
-    <p class="lede">Drop a finished track and the engine splits it into vocals, drums, bass and instruments. Balance each
-      stem with its own fader, pan, 3-band EQ and mute/solo &mdash; then bounce a fresh mixdown or send it straight into the 8D orbit.</p>
+    <p class="lede">A 16-channel console. Drop a finished track and the engine splits it into vocals, drums, bass and
+      instruments across the first channels &mdash; then load your own tracks, stems or overdubs into any of the remaining
+      slots. Every channel has its own fader, pan, 3-band EQ and mute/solo. Bounce a fresh mixdown or send it straight into the 8D orbit.</p>
 
     <div class="card" id="uploadCard">
       <div class="drop" id="drop">
@@ -1515,78 +1524,120 @@ async function loadStems(stems){
   $('uploadCard').style.display = 'none';
 }
 
+const CHANNEL_COUNT = 16;
+let masterGain = null;
+
 // buildMixer is global so it can be driven with synthetic buffers in tests.
+// It always lays out CHANNEL_COUNT strips; separated stems fill the first ones
+// and the rest stay empty until the user loads their own tracks into them.
 function buildMixer(decoded){
   ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
   const mixerEl = $('mixer'); mixerEl.innerHTML = ''; channels = [];
-  const masterGain = ctx.createGain();
+  masterGain = ctx.createGain();
   masterGain.gain.value = parseFloat($('masterFader').value);
   masterGain.connect(ctx.destination);
   $('masterFader').oninput = e => { masterGain.gain.value = parseFloat(e.target.value); };
-  duration = Math.max.apply(null, decoded.map(d => d.buffer.duration));
-
-  decoded.forEach(d => {
-    const ch = { name:d.name, buffer:d.buffer, vol:1, pan:0, mute:false, solo:false, eq:{lo:0,mid:0,hi:0} };
-    // persistent node chain: src -> lo -> mid -> hi -> pan -> gain -> analyser -> master
-    ch.lo = ctx.createBiquadFilter(); ch.lo.type='lowshelf'; ch.lo.frequency.value=200;
-    ch.mid = ctx.createBiquadFilter(); ch.mid.type='peaking'; ch.mid.frequency.value=1000; ch.mid.Q.value=1;
-    ch.hi = ctx.createBiquadFilter(); ch.hi.type='highshelf'; ch.hi.frequency.value=4000;
-    ch.panner = ctx.createStereoPanner();
-    ch.gain = ctx.createGain();
-    ch.analyser = ctx.createAnalyser(); ch.analyser.fftSize = 256;
-    ch.lo.connect(ch.mid).connect(ch.hi).connect(ch.panner).connect(ch.gain).connect(ch.analyser).connect(masterGain);
-
-    const el = document.createElement('div'); el.className = 'strip';
-    el.innerHTML =
-      '<div class="name">'+ch.name+'</div>'+
-      '<div class="meter"><i></i></div>'+
-      '<div class="eq">'+
-        '<div class="knob"><span>LO</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="lo"></div>'+
-        '<div class="knob"><span>MID</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="mid"></div>'+
-        '<div class="knob"><span>HI</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="hi"></div>'+
-      '</div>'+
-      '<div class="panrow"><span>PAN</span><input type="range" class="pan" min="-1" max="1" step="0.02" value="0"></div>'+
-      '<input type="range" class="fader" min="0" max="1.4" step="0.01" value="1">'+
-      '<div class="gaindb">0.0 dB</div>'+
-      '<div class="ms"><button class="m" title="Mute">M</button><button class="s" title="Solo">S</button></div>';
-    mixerEl.appendChild(el);
-
-    ch.meterEl = el.querySelector('.meter > i');
-    ch.gaindbEl = el.querySelector('.gaindb');
-    el.querySelectorAll('[data-eq]').forEach(inp => inp.oninput = e => {
-      const band = e.target.dataset.eq; ch.eq[band] = parseFloat(e.target.value);
-      ch[band].gain.value = ch.eq[band];
-    });
-    el.querySelector('.pan').oninput = e => { ch.pan = parseFloat(e.target.value); ch.panner.pan.value = ch.pan; };
-    el.querySelector('.fader').oninput = e => {
-      ch.vol = parseFloat(e.target.value);
-      ch.gaindbEl.textContent = (ch.vol<=0 ? '-inf' : (20*Math.log10(ch.vol)).toFixed(1)) + ' dB';
-      applyGains();
-    };
-    const mBtn = el.querySelector('.m'), sBtn = el.querySelector('.s');
-    mBtn.onclick = () => { ch.mute = !ch.mute; mBtn.classList.toggle('on', ch.mute); applyGains(); };
-    sBtn.onclick = () => { ch.solo = !ch.solo; sBtn.classList.toggle('on', ch.solo); applyGains(); };
-    channels.push(ch);
-  });
-
   window.__master = masterGain;
-  applyGains();
+
+  for (let i = 0; i < CHANNEL_COUNT; i++){
+    const ch = makeChannel(i);
+    channels.push(ch);
+    mixerEl.appendChild(ch.el);
+  }
+  (decoded || []).forEach((d, i) => { if (i < CHANNEL_COUNT) loadIntoChannel(channels[i], d.buffer, d.name); });
+
+  recalcDuration();
   mixerEl.style.display = 'flex';
   $('transport').style.display = 'flex';
   $('actions').style.display = 'flex';
-  $('tcode').textContent = '0:00 / ' + fmt(duration);
+}
+
+// One channel strip. Starts empty (no buffer) with a "+ Load track" button; a
+// track drops in either from stem separation or by importing a file.
+function makeChannel(i){
+  const ch = { idx:i, name:'', buffer:null, vol:1, pan:0, mute:false, solo:false, eq:{lo:0,mid:0,hi:0} };
+  const el = document.createElement('div'); el.className = 'strip empty';
+  el.innerHTML =
+    '<div class="chnum">CH '+(i+1)+'</div>'+
+    '<div class="name">&mdash;</div>'+
+    '<div class="meter"><i></i></div>'+
+    '<div class="eq">'+
+      '<div class="knob"><span>LO</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="lo"></div>'+
+      '<div class="knob"><span>MID</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="mid"></div>'+
+      '<div class="knob"><span>HI</span><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="hi"></div>'+
+    '</div>'+
+    '<div class="panrow"><span>PAN</span><input type="range" class="pan" min="-1" max="1" step="0.02" value="0"></div>'+
+    '<input type="range" class="fader" min="0" max="1.4" step="0.01" value="1">'+
+    '<div class="gaindb">0.0 dB</div>'+
+    '<div class="ms"><button class="m" title="Mute">M</button><button class="s" title="Solo">S</button></div>'+
+    '<button class="loadbtn" type="button">&#43; Load track</button>'+
+    '<input type="file" accept="audio/*" class="chfile" style="display:none">';
+  ch.el = el;
+  ch.nameEl = el.querySelector('.name');
+  ch.meterEl = el.querySelector('.meter > i');
+  ch.gaindbEl = el.querySelector('.gaindb');
+
+  el.querySelectorAll('[data-eq]').forEach(inp => inp.oninput = e => {
+    const band = e.target.dataset.eq; ch.eq[band] = parseFloat(e.target.value);
+    if (ch[band]) ch[band].gain.value = ch.eq[band];
+  });
+  el.querySelector('.pan').oninput = e => { ch.pan = parseFloat(e.target.value); if (ch.panner) ch.panner.pan.value = ch.pan; };
+  el.querySelector('.fader').oninput = e => {
+    ch.vol = parseFloat(e.target.value);
+    ch.gaindbEl.textContent = (ch.vol<=0 ? '-inf' : (20*Math.log10(ch.vol)).toFixed(1)) + ' dB';
+    applyGains();
+  };
+  const mBtn = el.querySelector('.m'), sBtn = el.querySelector('.s');
+  mBtn.onclick = () => { ch.mute = !ch.mute; mBtn.classList.toggle('on', ch.mute); applyGains(); };
+  sBtn.onclick = () => { ch.solo = !ch.solo; sBtn.classList.toggle('on', ch.solo); applyGains(); };
+
+  const fileInp = el.querySelector('.chfile');
+  el.querySelector('.loadbtn').onclick = () => fileInp.click();
+  fileInp.onchange = async () => {
+    const f = fileInp.files[0]; if (!f) return;
+    try {
+      ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
+      const buf = await ctx.decodeAudioData(await f.arrayBuffer());
+      loadIntoChannel(ch, buf, f.name.replace(/\.[^.]+$/, ''));
+    } catch(e){ setStatus('Could not decode ' + f.name, true); }
+  };
+  return ch;
+}
+
+// Attach an audio buffer to a channel: builds its node chain and activates it.
+function loadIntoChannel(ch, buffer, name){
+  ch.buffer = buffer; ch.name = name || ('Channel ' + (ch.idx+1));
+  // persistent node chain: src -> lo -> mid -> hi -> pan -> gain -> analyser -> master
+  ch.lo = ctx.createBiquadFilter(); ch.lo.type='lowshelf'; ch.lo.frequency.value=200; ch.lo.gain.value=ch.eq.lo;
+  ch.mid = ctx.createBiquadFilter(); ch.mid.type='peaking'; ch.mid.frequency.value=1000; ch.mid.Q.value=1; ch.mid.gain.value=ch.eq.mid;
+  ch.hi = ctx.createBiquadFilter(); ch.hi.type='highshelf'; ch.hi.frequency.value=4000; ch.hi.gain.value=ch.eq.hi;
+  ch.panner = ctx.createStereoPanner(); ch.panner.pan.value = ch.pan;
+  ch.gain = ctx.createGain();
+  ch.analyser = ctx.createAnalyser(); ch.analyser.fftSize = 256;
+  ch.lo.connect(ch.mid).connect(ch.hi).connect(ch.panner).connect(ch.gain).connect(ch.analyser).connect(masterGain);
+  ch.nameEl.textContent = ch.name;
+  ch.el.classList.remove('empty');
+  applyGains();
+  recalcDuration();
+}
+
+function loadedChannels(){ return channels.filter(c => c.buffer); }
+function recalcDuration(){
+  const ds = loadedChannels().map(c => c.buffer.duration);
+  duration = ds.length ? Math.max.apply(null, ds) : 0;
+  $('tcode').textContent = fmt(playing ? pos() : offset) + ' / ' + fmt(duration);
 }
 
 function applyGains(){
-  const anySolo = channels.some(c => c.solo);
-  channels.forEach(c => { c.gain.gain.value = (c.mute || (anySolo && !c.solo)) ? 0 : c.vol; });
+  const loaded = loadedChannels();
+  const anySolo = loaded.some(c => c.solo);
+  loaded.forEach(c => { c.gain.gain.value = (c.mute || (anySolo && !c.solo)) ? 0 : c.vol; });
 }
 
 function startSources(){
-  sources = channels.map(c => { const s = ctx.createBufferSource(); s.buffer = c.buffer; s.connect(c.lo); return s; });
-  const at = Math.max(0, Math.min(offset, duration - 0.02));
+  const at = Math.max(0, Math.min(offset, Math.max(0, duration - 0.02)));
   startedAt = ctx.currentTime;
-  sources.forEach(s => s.start(0, at));
+  sources = loadedChannels().map(c => { const s = ctx.createBufferSource(); s.buffer = c.buffer; s.connect(c.lo); s.start(0, at); return s; });
 }
 function stopSources(){ sources.forEach(s => { try{ s.stop(); }catch(e){} }); sources = []; }
 function pos(){ return playing ? Math.min(duration, offset + (ctx.currentTime - startedAt)) : offset; }
@@ -1599,7 +1650,7 @@ function frame(){
   rafId = requestAnimationFrame(frame);
 }
 function meterLoop(){
-  channels.forEach(c => {
+  loadedChannels().forEach(c => {
     const buf = new Uint8Array(c.analyser.frequencyBinCount);
     c.analyser.getByteTimeDomainData(buf);
     let sum = 0; for (let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
@@ -1610,7 +1661,7 @@ function meterLoop(){
 }
 
 $('play').onclick = () => {
-  if (!channels.length) return;
+  if (!loadedChannels().length) return;
   ctx.resume();
   if (playing){ offset = pos(); stopSources(); playing = false; $('play').innerHTML='&#9658;'; cancelAnimationFrame(rafId); }
   else { playing = true; $('play').innerHTML='&#10073;&#10073;'; startSources(); rafId = requestAnimationFrame(frame); meterLoop(); }
@@ -1625,11 +1676,12 @@ function stopAll(){
 
 // ── Offline mixdown ────────────────────────────────────────────────────────────
 async function renderMix(){
-  const sr = channels[0].buffer.sampleRate;
+  const loaded = loadedChannels();
+  const sr = loaded[0].buffer.sampleRate;
   const off = new OfflineAudioContext(2, Math.ceil(duration*sr), sr);
   const master = off.createGain(); master.gain.value = parseFloat($('masterFader').value); master.connect(off.destination);
-  const anySolo = channels.some(c => c.solo);
-  channels.forEach(c => {
+  const anySolo = loaded.some(c => c.solo);
+  loaded.forEach(c => {
     const s = off.createBufferSource(); s.buffer = c.buffer;
     const lo = off.createBiquadFilter(); lo.type='lowshelf'; lo.frequency.value=200; lo.gain.value=c.eq.lo;
     const mid = off.createBiquadFilter(); mid.type='peaking'; mid.frequency.value=1000; mid.Q.value=1; mid.gain.value=c.eq.mid;
@@ -1656,7 +1708,7 @@ function audioBufferToWav(buf){
 }
 
 $('mixdown').onclick = async () => {
-  if (!channels.length) return;
+  if (!loadedChannels().length) return;
   $('mixdown').disabled = true; setStatus('Rendering mixdown...');
   try {
     const blob = await renderMix();
@@ -1668,7 +1720,7 @@ $('mixdown').onclick = async () => {
 };
 
 $('to8d').onclick = async () => {
-  if (!channels.length) return;
+  if (!loadedChannels().length) return;
   $('to8d').disabled = true; setStatus('Rendering mix, then sending it to the 8D engine...');
   try {
     const blob = await renderMix();

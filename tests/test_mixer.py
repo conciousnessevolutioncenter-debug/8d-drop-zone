@@ -36,6 +36,18 @@ def test_mixer_page_has_web_audio_mixer_and_controls():
     assert "Send mix to the 8D engine" in html
 
 
+def test_mixer_is_a_16_channel_console():
+    module = load_live_module()
+    html = module.MIXER_HTML
+
+    # Fixed 16-channel board; stems fill the first channels and the rest are
+    # loadable slots for the user's own tracks.
+    assert "CHANNEL_COUNT = 16" in html
+    assert "Load track" in html
+    assert "function loadIntoChannel" in html
+    assert "16-channel console" in html
+
+
 def test_homepage_links_to_the_mixer():
     module = load_live_module()
     assert 'href="/mixer"' in module.HTML
