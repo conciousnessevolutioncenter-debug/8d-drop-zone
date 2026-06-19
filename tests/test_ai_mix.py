@@ -15,10 +15,29 @@ def load_web():
 
 def test_ai_mix_module_is_env_gated(monkeypatch):
     import ai_mix
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert ai_mix.available() is False
+    assert ai_mix.provider() == "none"
+    # Groq is the free default and takes precedence.
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    assert ai_mix.available() is True
+    assert ai_mix.provider() == "groq"
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     assert ai_mix.available() is True
+    assert ai_mix.provider() == "anthropic"
+
+
+def test_normalize_coerces_model_output():
+    import ai_mix
+    out = ai_mix._normalize({"channels": [{"stem": "vocals", "gain_db": 2}, {"bad": 1}, "junk"],
+                             "orbit": "slow", "notes": "ok"})
+    assert len(out["channels"]) == 1 and out["channels"][0]["stem"] == "vocals"
+    assert out["orbit"] == "slow" and out["notes"] == "ok"
+    # bad orbit dropped, missing notes defaulted
+    out2 = ai_mix._normalize({"channels": [], "orbit": "warp"})
+    assert "orbit" not in out2 and out2["notes"]
 
 
 def test_tool_schema_shapes_the_directives():
@@ -36,6 +55,7 @@ def test_ai_endpoint_registered_and_503_without_key(monkeypatch):
     module = load_web()
     paths = {getattr(r, "path", "") for r in module.app.routes}
     assert "/ai/mix" in paths
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     client = TestClient(module.app)
     r = client.post("/ai/mix", json={"prompt": "floaty vocals", "stems": ["vocals"]})

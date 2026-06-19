@@ -1464,7 +1464,7 @@ async def ai_mix(request: Request):
     """
     import ai_mix as _ai
     if not _ai.available():
-        raise HTTPException(status_code=503, detail="The AI co-producer isn't enabled yet (set ANTHROPIC_API_KEY).")
+        raise HTTPException(status_code=503, detail="The AI co-producer isn't enabled yet (set GROQ_API_KEY — it's free).")
     try:
         payload = await request.json()
     except Exception:
