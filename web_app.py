@@ -440,6 +440,9 @@ HTML = """
     @media (max-width:560px){
       .shell{ width:min(100vw - 22px,1200px); }
       .nav-note{ display:none; }
+      .nav{ flex-wrap:wrap; gap:12px; margin-bottom:30px; }
+      .nav-right{ flex-wrap:wrap; justify-content:flex-end; gap:10px; }
+      .nav-right .sys{ display:none; }
       .controls{ grid-template-columns:1fr; }
       .proof, .systems, .profiles{ grid-template-columns:1fr; }
       .orbit{ width:260px; }
@@ -536,7 +539,7 @@ HTML = """
             </div>
             <button class="launch" onclick="document.getElementById('file').click()">Select track</button>
             <div style="display:flex;gap:8px;margin-top:10px">
-              <input id="srcUrl" type="url" autocomplete="off" placeholder="…or paste a direct audio link (.wav / .mp3 / .flac)" style="flex:1;min-width:0;background:rgba(8,14,26,.7);border:1px solid var(--hair,rgba(255,255,255,.14));border-radius:10px;color:#e7edf6;padding:11px 13px;font-family:Inter,sans-serif;font-size:13px;outline:none"/>
+              <input id="srcUrl" type="url" autocomplete="off" placeholder="…or paste a direct audio link (.wav / .mp3 / .flac)" style="display:block;flex:1;min-width:0;background:rgba(8,14,26,.7);border:1px solid var(--hair,rgba(255,255,255,.14));border-radius:10px;color:#e7edf6;padding:11px 13px;font-family:Inter,sans-serif;font-size:13px;outline:none"/>
               <button class="launch" id="linkBtn" type="button">Spatialize link</button>
             </div>
             <p style="margin:8px 0 0;color:#8a93a8;font-size:11px;line-height:1.45">Upload or link audio you <strong>own or are licensed</strong> to use — we can't pull from streaming platforms.</p>
