@@ -68,6 +68,30 @@ def test_player_page_has_meta_player_and_share():
     assert png and png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_free_tier_branding_watermark():
+    """Free tier carries 8D branding on the shareable video + card (every share
+    an ad); a paid/clean track drops the footer watermark."""
+    T, trk = _new_track()
+
+    class R:
+        base_url = "https://the8dengine.com/"
+
+    js = T._player_js(trk, R())
+    assert "const WATERMARKED=true" in js
+    assert 'const DOMAIN="the8dengine.com"' in js
+    # The visualizer (in _share_js) gates its footer brand on WATERMARKED.
+    assert "if(WATERMARKED)" in T._share_js()
+    # Rendered page combines both in one <script>, so WATERMARKED is in scope.
+    page = T.render_player_page(R(), trk)
+    assert "const WATERMARKED=true" in page and "if(WATERMARKED)" in page
+    # Share card carries the domain when watermarked.
+    from social.db import SessionLocal
+    db = SessionLocal()
+    clean = T.create_track(db, audio_path=_make_wav(), title="Clean", watermarked=False)
+    db.close()
+    assert "const WATERMARKED=false" in T._player_js(clean, R())
+
+
 def test_embed_page_is_a_compact_player():
     T, trk = _new_track()
 

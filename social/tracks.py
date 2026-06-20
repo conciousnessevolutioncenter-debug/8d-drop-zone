@@ -174,6 +174,8 @@ def make_cover_png(track: Track) -> bytes | None:
     artist = track.artist or "Spatial master"
     d.text((80, 250), artist[:34], font=sub, fill=(157, 168, 184))
     d.text((80, 510), "🎧  Listen in 8D — headphones on", font=tag, fill=(72, 227, 255))
+    if getattr(track, "watermarked", True):
+        d.text((80, 556), "the8dengine.com", font=tag, fill=(157, 168, 184))
     from io import BytesIO
     out = BytesIO(); img.save(out, format="PNG"); return out.getvalue()
 
@@ -319,6 +321,8 @@ window.addEventListener('resize', ()=>{ setupWave(); drawWave(); }); setupWave()
 
 def _player_js(track: Track, request: Request, embed: bool = False) -> str:
     base = site_url(request)
+    from urllib.parse import urlparse
+    domain = urlparse(base).netloc or "the8dengine.com"
     header = (
         "const AUDIO_URL=" + json.dumps(f"{base}/t/{track.slug}/audio") + ";\n"
         "const SHARE_URL=" + json.dumps(f"{base}/t/{track.slug}") + ";\n"
@@ -326,6 +330,9 @@ def _player_js(track: Track, request: Request, embed: bool = False) -> str:
         "const TITLE=" + json.dumps(track.title or "Untitled") + ";\n"
         "const PEAKS=" + (track.peaks or "[]") + ";\n"
         "const EMBED=" + ("true" if embed else "false") + ";\n"
+        "const DOMAIN=" + json.dumps(domain) + ";\n"
+        # Free tier carries the brand watermark; paid (watermarked=False) gets a clean export.
+        "const WATERMARKED=" + ("true" if getattr(track, "watermarked", True) else "false") + ";\n"
     )
     return header + _PLAYER_BODY
 
@@ -384,7 +391,10 @@ async function makeVideo(){
     c.textAlign='center'; c.fillStyle='#e7edf6'; c.font='700 76px Space Grotesk, sans-serif';
     c.fillText(TITLE.length>20?TITLE.slice(0,19)+'…':TITLE, cx, H*0.74);
     c.fillStyle='#48e3ff'; c.font='600 38px JetBrains Mono, monospace'; c.fillText('🎧 LISTEN IN 8D', cx, H*0.79);
-    c.fillStyle='rgba(255,255,255,.7)'; c.font='600 34px JetBrains Mono, monospace'; c.fillText('THE 8D ENGINE', cx, H*0.93);
+    if(WATERMARKED){
+      c.fillStyle='rgba(255,255,255,.82)'; c.font='700 34px JetBrains Mono, monospace'; c.fillText('THE 8D ENGINE', cx, H*0.92);
+      c.fillStyle='rgba(72,227,255,.9)'; c.font='600 28px JetBrains Mono, monospace'; c.fillText(DOMAIN, cx, H*0.955);
+    }
     if(t>=30||audio.ended){ rec.stop(); audio.pause(); return; }
     requestAnimationFrame(frame);
   })();
