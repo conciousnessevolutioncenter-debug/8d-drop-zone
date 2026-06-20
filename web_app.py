@@ -535,6 +535,11 @@ HTML = """
               </select>
             </div>
             <button class="launch" onclick="document.getElementById('file').click()">Select track</button>
+            <div style="display:flex;gap:8px;margin-top:10px">
+              <input id="srcUrl" type="url" autocomplete="off" placeholder="…or paste a direct audio link (.wav / .mp3 / .flac)" style="flex:1;min-width:0;background:rgba(8,14,26,.7);border:1px solid var(--hair,rgba(255,255,255,.14));border-radius:10px;color:#e7edf6;padding:11px 13px;font-family:Inter,sans-serif;font-size:13px;outline:none"/>
+              <button class="launch" id="linkBtn" type="button">Spatialize link</button>
+            </div>
+            <p style="margin:8px 0 0;color:#8a93a8;font-size:11px;line-height:1.45">Upload or link audio you <strong>own or are licensed</strong> to use — we can't pull from streaming platforms.</p>
           </div>
           <div class="prompt-box">
             <label for="mixPrompt">Mix command console</label>
@@ -678,6 +683,45 @@ async function upload(f) {
   } finally {
     bar.style.display = 'none';
   }
+}
+
+// Frictionless link input: paste a direct audio URL the user owns -> instant 8D.
+async function spatializeLink() {
+  if (!DSP_OK) return;
+  const url = document.getElementById('srcUrl').value.trim();
+  if (!url) { statusEl.textContent = 'Paste a direct audio link first, or select a track.'; return; }
+  lastOriginalFile = null;                      // no local file for the A/B player
+  title.textContent = 'Fetching link…';
+  hint.textContent = url.slice(0, 80);
+  statusEl.textContent = 'Fetching your audio and sending it to the mastering engine…';
+  bar.style.display = 'block';
+  document.querySelector('.fill').classList.add('indeterminate');
+  const data = new FormData();
+  data.append('source_url', url);
+  data.append('preset', preset.value);
+  data.append('stem_mode', stemMode.value);
+  data.append('mix_prompt', mixPrompt.value.trim());
+  data.append('fmt', fmtSel ? fmtSel.value : 'wav');
+  try {
+    const res = await fetch(`${API}/convert`, { method: 'POST', body: data });
+    if (!res.ok) { let t = await res.text(); try { const d = JSON.parse(t); if (d.detail) t = d.detail; } catch(_) {} throw new Error(t); }
+    const json = await res.json();
+    title.textContent = 'Rendering spatial master…';
+    statusEl.textContent = 'Fetched. Tempo analysis, cleanup, binaural panning, room, and phase guard running now.';
+    await pollJob(json.job_id);
+  } catch (err) {
+    title.textContent = 'Could not spatialize that link';
+    let msg = err.message || String(err);
+    try { const d = JSON.parse(msg); if (d.detail) msg = d.detail; } catch(_) {}
+    statusEl.textContent = msg;
+  } finally {
+    bar.style.display = 'none';
+  }
+}
+{
+  const lb = document.getElementById('linkBtn'), su = document.getElementById('srcUrl');
+  if (lb) lb.onclick = spatializeLink;
+  if (su) su.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); spatializeLink(); } });
 }
 
 function xhrUpload(url, formData, onProgress) {
@@ -1305,8 +1349,97 @@ async def health():
     }
 
 
+# Streaming platforms host copyrighted catalogs — we never pull from them. The
+# frictionless "link" input is strictly for direct audio files the user owns or
+# is licensed for (their own hosted .wav/.mp3, a cloud direct link, etc.).
+_BLOCKED_AUDIO_HOSTS = (
+    "youtube.com", "youtu.be", "youtube-nocookie.com", "music.youtube.com",
+    "spotify.com", "open.spotify.com", "soundcloud.com", "music.apple.com",
+    "tidal.com", "deezer.com", "bandcamp.com", "audiomack.com", "mixcloud.com",
+    "napster.com", "pandora.com", "iheart.com",
+)
+_AUDIO_EXTS = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".aiff", ".aif", ".wma")
+_CTYPE_EXT = {"audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav",
+              "audio/wave": ".wav", "audio/flac": ".flac", "audio/x-flac": ".flac", "audio/mp4": ".m4a",
+              "audio/aac": ".aac", "audio/ogg": ".ogg", "audio/opus": ".opus"}
+
+
+def _guard_public_host(host: str):
+    """Raise unless the host resolves only to public IPs (SSRF defense)."""
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Couldn't resolve that link's host.")
+    for info in infos:
+        raw = info[4][0].split("%")[0]
+        try:
+            addr = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            raise HTTPException(status_code=400, detail="That link points to a private or internal address, which isn't allowed.")
+
+
+def _fetch_audio_url(url: str):
+    """Download a direct audio-file URL into APP_DIR. Returns (path, display_name).
+
+    Rights guard: rejects streaming platforms and anything that isn't an audio
+    file. Size-capped to MAX_UPLOAD_BYTES. Raises HTTPException on any problem.
+    """
+    import requests
+    from urllib.parse import urlparse, unquote
+
+    u = urlparse((url or "").strip())
+    if u.scheme not in ("http", "https") or not u.netloc:
+        raise HTTPException(status_code=400, detail="Paste a full http(s) link to an audio file.")
+    host = u.netloc.lower().split(":")[0].split("@")[-1]
+    if any(host == b or host.endswith("." + b) for b in _BLOCKED_AUDIO_HOSTS):
+        raise HTTPException(status_code=400, detail="We can't pull from streaming platforms (rights). Paste a direct link to an audio file you own — a .wav/.mp3/.flac URL — or upload it.")
+    # SSRF guard: never let a user URL reach loopback / private / link-local
+    # (incl. the 169.254.169.254 cloud-metadata endpoint) or other internal hosts.
+    _guard_public_host(host)
+    name = (unquote(Path(u.path).name) or "linked_audio")[:80]
+    try:
+        r = requests.get(url, stream=True, timeout=30, headers={"User-Agent": "The8DEngine/1.0"})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Couldn't reach that link: {exc}")
+    try:
+        if r.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"That link returned HTTP {r.status_code}.")
+        ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+        ext = Path(name).suffix.lower()
+        looks_audio = ctype.startswith("audio/") or ctype in ("application/octet-stream", "binary/octet-stream") or ext in _AUDIO_EXTS
+        if not looks_audio:
+            raise HTTPException(status_code=400, detail=f"That link isn't an audio file (type: {ctype or 'unknown'}). Paste a direct .wav/.mp3/.flac link, or upload the file.")
+        if ext not in _AUDIO_EXTS:
+            ext = _CTYPE_EXT.get(ctype, ".audio")
+            if not Path(name).suffix:
+                name = name + ext
+        dest = APP_DIR / f"linkdl_{uuid.uuid4().hex[:10]}{ext}"
+        total = 0
+        with dest.open("wb") as f:
+            for chunk in r.iter_content(1024 * 256):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail=f"That file is larger than {MAX_UPLOAD_MB} MB.")
+                f.write(chunk)
+        if total == 0:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="That link returned no audio data.")
+        return dest, name
+    finally:
+        r.close()
+
+
 @app.post("/convert")
-async def convert(file: UploadFile = File(...), preset: str = Form("reference_luxe"), mix_prompt: str = Form(""), stem_mode: str = Form("classic"), fmt: str = Form("wav")):
+async def convert(file: UploadFile = File(None), source_url: str = Form(""), preset: str = Form("reference_luxe"), mix_prompt: str = Form(""), stem_mode: str = Form("classic"), fmt: str = Form("wav")):
     fmt = fmt.lower() if fmt.lower() in ("wav", "mp3", "flac") else "wav"
     if not DSP_AVAILABLE:
         raise HTTPException(
@@ -1317,26 +1450,35 @@ async def convert(file: UploadFile = File(...), preset: str = Form("reference_lu
                 "Run the app locally for full rendering: python -m uvicorn web_app:app --port 8765"
             ),
         )
-    suffix = Path(file.filename or "audio").suffix.lower() or ".audio"
-    safe_stem = Path(file.filename or "audio").stem.replace("/", "_").replace("\\", "_")[:80]
     job_id = uuid.uuid4().hex[:12]
-    src = APP_DIR / f"{safe_stem}_{job_id}{suffix}"
+    if file is not None and file.filename:
+        # ── Upload path: stream the multipart body to disk, memory-bounded. ──
+        suffix = Path(file.filename).suffix.lower() or ".audio"
+        safe_stem = Path(file.filename).stem.replace("/", "_").replace("\\", "_")[:80] or "audio"
+        src = APP_DIR / f"{safe_stem}_{job_id}{suffix}"
+        input_name = file.filename
+        total = 0
+        with src.open("wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    f.close()
+                    src.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail=f"File is too large. Please upload tracks {MAX_UPLOAD_MB} MB or smaller.")
+                f.write(chunk)
+    elif (source_url or "").strip():
+        # ── Link path: frictionless input for audio the user owns/licenses. ──
+        dl_path, input_name = _fetch_audio_url(source_url)
+        suffix = dl_path.suffix.lower() or ".audio"
+        safe_stem = (Path(input_name).stem.replace("/", "_").replace("\\", "_")[:80]) or "linked"
+        src = APP_DIR / f"{safe_stem}_{job_id}{suffix}"
+        dl_path.replace(src)
+    else:
+        raise HTTPException(status_code=400, detail="Upload a track or paste a direct audio link.")
     out = APP_DIR / f"{safe_stem}_{job_id}_8D_Final.wav"
-    total = 0
-    with src.open("wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            total += len(chunk)
-            if total > MAX_UPLOAD_BYTES:
-                f.close()
-                src.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"File is too large. Please upload tracks {MAX_UPLOAD_MB} MB or smaller.",
-                )
-            f.write(chunk)
-    _set_job(job_id, status="queued", message="Upload complete. Waiting for DSP worker…", input_name=file.filename, output_name=out.name, mix_prompt=mix_prompt, stem_mode=stem_mode)
+    _set_job(job_id, status="queued", message="Got it. Waiting for the DSP worker…", input_name=input_name, output_name=out.name, mix_prompt=mix_prompt, stem_mode=stem_mode)
     EXECUTOR.submit(_process_job, job_id, src, out, preset, mix_prompt, stem_mode, fmt)
-    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing", "message": "Upload accepted. DSP render started."})
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing", "message": "Accepted. DSP render started."})
 
 @app.get("/jobs/{job_id}")
 async def job_status(job_id: str):
