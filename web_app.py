@@ -788,6 +788,9 @@ async function publishTrack(jobId) {
     const data = await res.json();
     const u = data.url, txt = encodeURIComponent('🎧 Listen to my track in 8D (headphones on)');
     const eu = encodeURIComponent(u);
+    const wmLine = data.watermarked
+      ? `<div style="font-size:11px;color:#8a93a8;margin-top:10px;border-top:1px solid rgba(255,255,255,.08);padding-top:10px">🔓 Free share carries a subtle 8D watermark on the video &amp; card. <a href="${data.upgrade_url}" target="_blank" style="color:#62e0ff">Upgrade for watermark-free shares →</a></div>`
+      : `<div style="font-size:11px;color:#5dcaa5;margin-top:10px;border-top:1px solid rgba(255,255,255,.08);padding-top:10px">✓ Clean share — no watermark (${data.tier || 'paid'} plan).</div>`;
     if (btn) btn.style.display = 'none';
     box.innerHTML = `
       <div style="border:1px solid var(--hair,rgba(255,255,255,.14));border-radius:14px;padding:14px;background:rgba(13,20,38,.4)">
@@ -801,6 +804,7 @@ async function publishTrack(jobId) {
           <a href="https://www.facebook.com/sharer/sharer.php?u=${eu}" target="_blank" style="text-decoration:none;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:#cdd6e6">Facebook</a>
         </div>
         <div style="font-size:11px;color:#8a93a8;margin-top:10px">Open the page to grab a TikTok/Reels visualizer video.</div>
+        ${wmLine}
       </div>`;
     const cp = document.getElementById('copyShare');
     if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText(u); cp.textContent = 'Copied!'; setTimeout(() => cp.textContent = 'Copy link', 1600); } catch(_) {} };
@@ -1650,22 +1654,34 @@ async def publish_track(request: Request, job_id: str = Form(...), title: str = 
 
     from social.db import SessionLocal
     from social import tracks as _tracks
+    from social.models import User as _User
+    from social import entitlements as _ent
     db = SessionLocal()
     try:
+        owner = None
+        user = None
         try:
             owner = request.session.get("uid") or None
+            if owner:
+                user = db.get(_User, int(owner))
         except Exception:
             owner = None
+        # Monetization gate: paid tiers get watermark-free shares + downloads;
+        # free/anonymous publishes carry the 8D brand (every share an ad).
+        paid = _ent.is_paid(user)
         track = _tracks.create_track(
             db, audio_path=mp3_path,
             wav_path=wav_path if is_wav else None,
             title=base_title, artist=(artist or "").strip(),
             lufs=str(job.get("lufs") or ""), true_peak=str(job.get("true_peak") or ""),
             preset=str(job.get("preset") or ""), owner_id=owner,
-            allow_download=False, watermarked=True,
+            allow_download=paid, watermarked=not paid,
         )
         base = _tracks.site_url(request)
-        return {"slug": track.slug, "url": f"{base}/t/{track.slug}", "embed": f"{base}/embed/{track.slug}"}
+        return {
+            "slug": track.slug, "url": f"{base}/t/{track.slug}", "embed": f"{base}/embed/{track.slug}",
+            "watermarked": (not paid), "tier": _ent.tier_of(user), "upgrade_url": f"{base}/social/billing",
+        }
     finally:
         db.close()
 

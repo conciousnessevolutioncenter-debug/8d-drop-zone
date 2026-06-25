@@ -57,7 +57,7 @@ def _tier_for_price(price_id: str) -> str | None:
 
 _PERKS = {
     "free":     ["Listen / watch / transcribe", "5 analyses / month", "Preview only — no downloads"],
-    "creator":  ["Everything in Free", "Unlimited analysis (credits)", "Downloads (standard quality)", "Basic mixing — levels & fades"],
+    "creator":  ["Everything in Free", "Watermark-free shares (clean video & card)", "Unlimited analysis (credits)", "Downloads (standard quality)", "Basic mixing — levels & fades"],
     "producer": ["Everything in Creator", "Full mixing — EQ, comp, reverb, multitrack", "High-quality downloads"],
     "studio":   ["Everything in Producer", "8D spatial editor (exclusive)", "AI stem separation", "Studio-fidelity downloads"],
 }
@@ -101,7 +101,12 @@ def billing(request: Request, db: Session = Depends(get_db)):
               f'Current plan: {esc(ent.label(user))}</div>'
               f'<div class="handle">credits: {user.credits} · unlocks: {esc(capline)}</div></div>'
               f'<a href="/social/studio" class="btn ghost" style="margin-left:auto">Open studio</a>{manage}</div></div>')
-    note = '' if os.environ.get("SOCIAL_DEV") else '<p class="muted" style="margin-top:12px">Secure checkout (Stripe) activates in the payments phase — these plans are wired and ready.</p>'
+    if os.environ.get("SOCIAL_DEV"):
+        note = ''
+    elif stripe_enabled():
+        note = '<p class="muted" style="margin-top:12px">Secure checkout by Stripe. Cancel anytime from Manage subscription.</p>'
+    else:
+        note = '<p class="muted" style="margin-top:12px">Secure checkout (Stripe) activates once billing keys are set — these plans are wired and ready.</p>'
     return HTMLResponse(layout("Plans", '<h1>Plans &amp; billing</h1><p class="lede">Upgrade for downloads, mixing, and the 8D editor.</p>' + status + grid + note, user, "billing"))
 
 
