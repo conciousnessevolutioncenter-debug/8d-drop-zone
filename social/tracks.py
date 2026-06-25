@@ -233,7 +233,8 @@ _PLAYER_CSS = """
   .meta{ display:flex; gap:14px; justify-content:center; font-family:var(--mono); font-size:11px; color:var(--soft); margin:14px 0 22px; flex-wrap:wrap; }
   .share{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-bottom:18px; }
   .sbtn{ cursor:pointer; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.04); color:#cdd6e6; border-radius:10px;
-    padding:10px 14px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-decoration:none; }
+    padding:10px 14px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-decoration:none;
+    display:inline-flex; align-items:center; justify-content:center; min-height:44px; min-width:44px; }
   .sbtn:hover{ border-color:var(--cyan); color:var(--cyan); }
   .sbtn.vid{ background:linear-gradient(135deg,var(--cyan),var(--violet)); color:#06101c; border-color:transparent; font-weight:600; }
   .cta{ display:inline-block; margin-top:8px; font-family:var(--mono); font-size:12px; letter-spacing:.1em; text-transform:uppercase;
