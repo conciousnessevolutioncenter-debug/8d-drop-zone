@@ -615,7 +615,11 @@ let lastOriginalFile = null;
 //   • Real-time XHR progress works correctly (no proxy buffering)
 // Local dev uses the same origin so relative paths work unchanged.
 const IS_DEV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-const API = IS_DEV ? '' : 'https://luminous-endurance-production-0696.up.railway.app';
+// Same-origin when the Railway app itself serves the page (the8dengine.com / www /
+// *.railway.app / localhost) so the login session rides along with publish + AI calls and
+// the paid watermark gate works. Only fall back to the absolute API from a non-API host.
+const _h = location.hostname;
+const API = (IS_DEV || _h.endsWith('the8dengine.com') || _h.endsWith('.railway.app')) ? '' : 'https://luminous-endurance-production-0696.up.railway.app';
 
 // ── DSP availability check ────────────────────────────────────────────────────
 let DSP_OK = true;
@@ -1926,7 +1930,11 @@ MIXER_HTML = r"""<!doctype html>
 // Talk to the long-lived Railway backend directly in production (Vercel can't
 // run the DSP/separation worker). Same single-hop pattern as the home page.
 const IS_DEV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-const API = IS_DEV ? '' : 'https://luminous-endurance-production-0696.up.railway.app';
+// Same-origin when the Railway app itself serves the page (the8dengine.com / www /
+// *.railway.app / localhost) so the login session rides along with publish + AI calls and
+// the paid watermark gate works. Only fall back to the absolute API from a non-API host.
+const _h = location.hostname;
+const API = (IS_DEV || _h.endsWith('the8dengine.com') || _h.endsWith('.railway.app')) ? '' : 'https://luminous-endurance-production-0696.up.railway.app';
 const $ = id => document.getElementById(id);
 const drop = $('drop'), fileIn = $('file'), statusEl = $('status');
 let ctx = null, channels = [], duration = 0;
