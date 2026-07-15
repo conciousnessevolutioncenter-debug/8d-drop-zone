@@ -49,6 +49,13 @@ def _price_for(tier: str) -> str | None:
     return os.environ.get(_TIER_PRICE_ENV.get(tier, ""), None)
 
 
+def _public_base(request: Request) -> str:
+    """Canonical https base for Stripe redirect URLs. Behind Railway's proxy,
+    request.base_url can be http:// or an internal host — prefer the canonical
+    public URL so checkout always returns the customer to the real site."""
+    return (os.environ.get("PUBLIC_SITE_URL") or str(request.base_url)).rstrip("/")
+
+
 def _tier_for_price(price_id: str) -> str | None:
     for tier, env in _TIER_PRICE_ENV.items():
         if os.environ.get(env) == price_id:
@@ -66,26 +73,28 @@ _PRICE = {"free": "Free", "creator": "$6/mo", "producer": "$14/mo", "studio": "$
 
 @billing_router.get("/billing", response_class=HTMLResponse)
 def billing(request: Request, db: Session = Depends(get_db)):
+    # Public pricing page: anonymous visitors see the tiers (conversion!),
+    # logged-in users additionally get their plan status + upgrade buttons.
     user = optional_user(request, db)
-    if not user:
-        return RedirectResponse("/social/login", status_code=303)
     dev = bool(os.environ.get("SOCIAL_DEV"))
-    cur = ent.tier_of(user)
+    cur = ent.tier_of(user) if user else None
     cards = ""
     for t in ent.ORDER:
-        info = TIERS_meta = ent.TIERS[t]
+        info = ent.TIERS[t]
         active = (t == cur)
         perks = "".join(f'<li>{esc(p)}</li>' for p in _PERKS[t])
         if active:
             btn = '<span class="pro" style="display:inline-block;margin-top:12px">CURRENT PLAN</span>'
-        elif dev:
+        elif user and dev:
             btn = (f'<form method="post" action="/social/dev/set-tier"><input type="hidden" name="tier" value="{t}">'
                    f'<button class="btn" type="submit">Switch to {esc(info["label"])}</button></form>')
         elif t == "free":
-            btn = ''
-        else:
+            btn = '' if user else '<a href="/social/register" class="btn ghost" style="margin-top:12px;display:inline-block">Start free</a>'
+        elif user:
             btn = '<form method="post" action="/social/billing/checkout"><input type="hidden" name="tier" value="%s">' \
                   '<button class="btn" type="submit">Upgrade</button></form>' % t
+        else:
+            btn = '<a href="/social/login" class="btn" style="margin-top:12px;display:inline-block">Sign in to upgrade</a>'
         border = "border:2px solid var(--cyan)" if active else "border:1px solid var(--hair)"
         cards += (f'<div class="card" style="{border};margin-top:0">'
                   f'<div class="tag" style="color:var(--cyan)">{esc(info["label"]).upper()}</div>'
@@ -93,21 +102,29 @@ def billing(request: Request, db: Session = Depends(get_db)):
                   f'<ul class="muted" style="padding-left:16px;margin:8px 0 0;font-size:12.5px;line-height:1.7">{perks}</ul>'
                   f'{btn}</div>')
     grid = f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:14px">{cards}</div>'
-    capline = ", ".join(sorted(ent.caps(user))) or "analyze"
-    manage = ""
-    if ent.is_paid(user) and stripe_enabled() and user.stripe_customer_id:
-        manage = '<form method="post" action="/social/billing/portal" style="margin-left:8px"><button class="btn ghost" type="submit">Manage subscription</button></form>'
-    status = (f'<div class="card"><div class="row"><div><div style="font-size:15px;font-weight:600">'
-              f'Current plan: {esc(ent.label(user))}</div>'
-              f'<div class="handle">credits: {user.credits} · unlocks: {esc(capline)}</div></div>'
-              f'<a href="/social/studio" class="btn ghost" style="margin-left:auto">Open studio</a>{manage}</div></div>')
-    if os.environ.get("SOCIAL_DEV"):
+    banner = ""
+    if user and request.query_params.get("upgraded"):
+        banner = ('<div class="card" style="border:1px solid var(--cyan);background:rgba(98,224,255,.06)">'
+                  '<b>🎉 Welcome to your new plan!</b> <span class="muted">Your upgrade is active — new publishes are '
+                  'watermark-free and your studio tools are unlocked. (If the plan below still shows your old tier, '
+                  'give it a few seconds and refresh.)</span></div>')
+    status = ""
+    if user:
+        capline = ", ".join(sorted(ent.caps(user))) or "analyze"
+        manage = ""
+        if ent.is_paid(user) and stripe_enabled() and user.stripe_customer_id:
+            manage = '<form method="post" action="/social/billing/portal" style="margin-left:8px"><button class="btn ghost" type="submit">Manage subscription</button></form>'
+        status = (f'<div class="card"><div class="row"><div><div style="font-size:15px;font-weight:600">'
+                  f'Current plan: {esc(ent.label(user))}</div>'
+                  f'<div class="handle">credits: {user.credits} · unlocks: {esc(capline)}</div></div>'
+                  f'<a href="/social/studio" class="btn ghost" style="margin-left:auto">Open studio</a>{manage}</div></div>')
+    if user and os.environ.get("SOCIAL_DEV"):
         note = ''
     elif stripe_enabled():
         note = '<p class="muted" style="margin-top:12px">Secure checkout by Stripe. Cancel anytime from Manage subscription.</p>'
     else:
         note = '<p class="muted" style="margin-top:12px">Secure checkout (Stripe) activates once billing keys are set — these plans are wired and ready.</p>'
-    return HTMLResponse(layout("Plans", '<h1>Plans &amp; billing</h1><p class="lede">Upgrade for downloads, mixing, and the 8D editor.</p>' + status + grid + note, user, "billing"))
+    return HTMLResponse(layout("Plans", '<h1>Plans &amp; billing</h1><p class="lede">Upgrade for watermark-free shares, downloads, mixing, and the 8D editor.</p>' + banner + status + grid + note, user, "billing"))
 
 
 @billing_router.post("/billing/checkout")
@@ -123,7 +140,7 @@ def checkout(request: Request, db: Session = Depends(get_db), tier: str = Form(.
     if not user.stripe_customer_id:
         cust = stripe.Customer.create(email=user.email, metadata={"uid": str(user.id)})
         user.stripe_customer_id = cust["id"]; db.commit()
-    base = str(request.base_url).rstrip("/")
+    base = _public_base(request)
     session = stripe.checkout.Session.create(
         mode="subscription",
         customer=user.stripe_customer_id,
@@ -144,7 +161,7 @@ def portal(request: Request, db: Session = Depends(get_db), user: User = Depends
         return RedirectResponse("/social/billing", status_code=303)
     sess = stripe.billing_portal.Session.create(
         customer=user.stripe_customer_id,
-        return_url=f"{str(request.base_url).rstrip('/')}/social/billing",
+        return_url=f"{_public_base(request)}/social/billing",
     )
     return RedirectResponse(sess["url"], status_code=303)
 

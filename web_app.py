@@ -461,6 +461,7 @@ HTML = """
       <div class="nav-right">
         <span class="sys"><span class="pulse"></span> All systems nominal</span>
         <a href="/mixer" style="font-family:var(--mono,monospace);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9fb0c8;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:8px 15px;text-decoration:none">Multitrack mixer</a>
+        <a href="/social/billing" style="font-family:var(--mono,monospace);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9fb0c8;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:8px 15px;text-decoration:none">Plans</a>
         <a href="/social" style="font-family:var(--mono,monospace);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#06101c;background:linear-gradient(135deg,#62e0ff,#9d8bff);border-radius:999px;padding:8px 15px;text-decoration:none">Community / Sign in</a>
       </div>
     </nav>

@@ -60,6 +60,40 @@ def test_stripe_backend_is_fully_wired():
     assert any("Watermark-free" in p for p in billing._PERKS["creator"])
 
 
+def test_pricing_page_is_public_and_homepage_links_to_it():
+    """Anonymous visitors must see the tiers (conversion funnel), with sign-in
+    CTAs instead of checkout buttons; the homepage nav links to Plans."""
+    _fresh_env()
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "web_app.py"
+    spec = importlib.util.spec_from_file_location("eightd_pricing_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    from fastapi.testclient import TestClient
+    client = TestClient(module.app)
+    r = client.get("/social/billing")           # no session
+    assert r.status_code == 200                  # public, not a login redirect
+    for label in ("$6/mo", "$14/mo", "$29/mo", "Sign in to upgrade", "Start free"):
+        assert label in r.text
+    assert 'href="/social/billing"' in module.HTML   # homepage nav -> Plans
+
+
+def test_stripe_redirects_use_canonical_public_base():
+    """Checkout/portal success URLs must come from PUBLIC_SITE_URL, not the
+    proxy-mangled request.base_url."""
+    _fresh_env()
+    from social import billing
+
+    class R:
+        base_url = "http://internal-railway-host:8080/"
+
+    assert billing._public_base(R()) == "https://the8dengine.com"
+    os.environ.pop("PUBLIC_SITE_URL", None)
+    assert billing._public_base(R()) == "http://internal-railway-host:8080"
+
+
 def test_publish_endpoint_returns_gate_fields():
     _fresh_env()
     import importlib.util
