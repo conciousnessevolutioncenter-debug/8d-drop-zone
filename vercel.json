@@ -1,12 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "builds": [
+  "outputDirectory": "public",
+  "redirects": [
     {
-      "src": "web_app.py",
-      "use": "@vercel/python"
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "the8dengine.com" }],
+      "destination": "https://www.the8dengine.com/:path*",
+      "permanent": true
     }
-  ],
-  "routes": [
-    { "src": "/(.*)", "status": 308, "headers": { "Location": "https://www.the8dengine.com/$1" } }
   ]
 }
