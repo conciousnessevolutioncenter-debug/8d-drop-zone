@@ -13,12 +13,14 @@ from email.message import EmailMessage
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from .appsecret import session_secret
+
 _RESET_SALT = "8d-password-reset"
 _VERIFY_SALT = "8d-email-verify"
 
 
 def _serializer(salt: str) -> URLSafeTimedSerializer:
-    secret = os.environ.get("SESSION_SECRET", "dev-insecure-change-me")
+    secret = session_secret()
     return URLSafeTimedSerializer(secret, salt=salt)
 
 

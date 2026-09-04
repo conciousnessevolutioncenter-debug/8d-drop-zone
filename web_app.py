@@ -74,6 +74,14 @@ app.add_middleware(
 
 # ---- Social layer (additive). Guarded like the DSP imports: if its deps are
 # missing or the DB can't init, the audio tool keeps working untouched. ----
+# The signing secret is resolved before the guarded imports below: a bad value
+# must stop the process, not fall through to an app whose sessions are forgeable.
+try:
+    from social.appsecret import session_secret as _resolve_session_secret
+except Exception:
+    _resolve_session_secret = None
+_SESSION_SECRET = _resolve_session_secret() if _resolve_session_secret else None
+
 SOCIAL_AVAILABLE = False
 try:
     from starlette.middleware.sessions import SessionMiddleware
@@ -85,7 +93,7 @@ try:
 
     app.add_middleware(
         SessionMiddleware,
-        secret_key=os.environ.get("SESSION_SECRET", "dev-insecure-change-me"),
+        secret_key=_SESSION_SECRET,
         same_site="lax",
         https_only=bool(os.environ.get("SESSION_HTTPS")),
     )
