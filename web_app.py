@@ -1331,6 +1331,38 @@ def _process_job(job_id: str, src: Path, out: Path, preset: str = "reference_lux
                 Path(_lv["src_wav"]).unlink(missing_ok=True)
         except Exception:
             pass
+        # The original upload is fully decoded by this point (success or failure)
+        # and is never read again. /files serves APP_DIR with no auth, so leaving
+        # it behind would keep a stranger's raw, possibly unreleased track sitting
+        # at a guessable-format URL indefinitely.
+        try:
+            src.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+APP_DIR_MAX_AGE_SECONDS = 6 * 60 * 60  # long enough to finish a download or publish
+
+
+def _sweep_stale_app_dir_files(max_age_seconds: int = APP_DIR_MAX_AGE_SECONDS) -> None:
+    """Delete APP_DIR files older than max_age_seconds.
+
+    /files serves this directory with no auth, and /tracks/publish already
+    treats a missing render here as "expired" — so nothing downstream depends
+    on files outliving this window. Called opportunistically from /convert
+    rather than on a timer, since that's the only reliably recurring traffic.
+    """
+    cutoff = time.time() - max_age_seconds
+    try:
+        for f in APP_DIR.iterdir():
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
 
 def _cgroup_mem():
     """Return (limit_mb, usage_mb) from the container cgroup, or (None, None)."""
@@ -1471,6 +1503,7 @@ async def convert(file: UploadFile = File(None), source_url: str = Form(""), pre
             ),
         )
     job_id = uuid.uuid4().hex[:12]
+    _sweep_stale_app_dir_files()
     if file is not None and file.filename:
         # ── Upload path: stream the multipart body to disk, memory-bounded. ──
         suffix = Path(file.filename).suffix.lower() or ".audio"
