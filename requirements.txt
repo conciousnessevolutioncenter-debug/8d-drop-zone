@@ -2,6 +2,10 @@
 fastapi>=0.100
 uvicorn[standard]>=0.23
 python-multipart>=0.0.7
+# Direct dependency: the "paste a link" audio fetch (web_app.py) and the AI
+# co-producer's Groq/Anthropic calls (ai_mix.py) both import it directly.
+# It was only ever present transitively via replicate, so it worked by luck.
+requests>=2.31
 # DSP stack — enables full spatial mastering on Railway and local servers.
 # scipy and soundfile are optional but recommended; the engine falls back
 # gracefully to numpy-only crossover filters and stdlib WAV if they are absent.

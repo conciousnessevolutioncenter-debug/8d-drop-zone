@@ -55,7 +55,17 @@ MAX_UPLOAD_MB = 200
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 JOBS = {}
 JOBS_LOCK = Lock()
-EXECUTOR = ThreadPoolExecutor(max_workers=1)
+# A single worker means one long render (the homepage advertises a 60-minute
+# cap) blocks every other paying customer's queue for its full run time.
+# Measured on this render pipeline: a 10-minute track adds ~100MB of RSS
+# above baseline and releases it fully afterward, so a full 60-minute render
+# peaks near +600MB. Two concurrent full-length renders is ~1.2GB beyond
+# baseline — more than a small Railway plan has. There's no single safe
+# default across plans, so this is a knob, not a guess: check the live
+# /health response's mem_limit_mb against that math for your actual plan
+# before raising it.
+RENDER_WORKERS = max(1, int(os.environ.get("RENDER_WORKERS", "1")))
+EXECUTOR = ThreadPoolExecutor(max_workers=RENDER_WORKERS)
 # Stem separation can take minutes on the free cloud worker; give it its own
 # pool so a long separation never blocks the 8D render queue (and vice versa).
 STEM_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -127,6 +137,13 @@ try:
         return await call_next(request)
     SOCIAL_AVAILABLE = True
     print("[social] enabled at /social", flush=True)
+    if os.environ.get("SOCIAL_DEV"):
+        # /dev/set-tier grants any tier to the calling user with no payment,
+        # gated only by this flag. It's meant for a local dev shell, never a
+        # public deploy — a paid launch with this on gives every visitor a
+        # free upgrade to any tier. Loud on purpose: this should be the one
+        # line worth noticing in a "why isn't anyone paying" log scan.
+        print("[social] WARNING: SOCIAL_DEV is set — /dev/set-tier grants free tier upgrades to anyone. Unset it in production.", flush=True)
 except Exception as _social_err:  # pragma: no cover - keeps audio app alive
     print(f"[social] disabled: {_social_err}", flush=True)
 
@@ -1398,6 +1415,7 @@ async def health():
         "platform": "vercel" if _ON_VERCEL else "server",
         "mem_limit_mb": lim,
         "mem_usage_mb": use,
+        "render_workers": RENDER_WORKERS,
     }
 
 

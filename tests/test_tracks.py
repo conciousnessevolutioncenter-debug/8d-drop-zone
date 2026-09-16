@@ -102,13 +102,38 @@ def test_embed_page_is_a_compact_player():
     assert 'id="orbit"' in emb and "Open in 8D" in emb
 
 
+def _all_route_paths(app) -> set[str]:
+    """Collect every registered path, including those under an included
+    router. Newer FastAPI/Starlette wraps each app.include_router(...) call
+    in an opaque _IncludedRouter with no .routes of its own; the real Route
+    objects live on its .original_router. Older versions list routes flat on
+    app.routes directly, so both are walked here."""
+    paths: set[str] = set()
+    seen_ids: set[int] = set()
+
+    def walk(routes) -> None:
+        for r in routes:
+            if id(r) in seen_ids:
+                continue
+            seen_ids.add(id(r))
+            path = getattr(r, "path", "")
+            if path:
+                paths.add(path)
+            nested = getattr(r, "routes", None) or getattr(getattr(r, "original_router", None), "routes", None)
+            if nested:
+                walk(nested)
+
+    walk(app.routes)
+    return paths
+
+
 def test_track_routes_registered_and_publish_exists():
     path = Path(__file__).resolve().parents[1] / "web_app.py"
     spec = importlib.util.spec_from_file_location("eightd_tracks_under_test", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    paths = {getattr(r, "path", "") for r in module.app.routes}
+    paths = _all_route_paths(module.app)
     assert "/t/{slug}" in paths
     assert "/embed/{slug}" in paths
     assert "/t/{slug}/audio" in paths
