@@ -129,3 +129,17 @@ docs/             # implementation notes
 ## Important note
 
 This is an HRTF-inspired renderer, not personalized measured-HRTF convolution. It creates the 8D illusion with practical psychoacoustic cues: ITD, ILD, rear filtering, frequency-dependent motion, and room reflections.
+
+## Windows-first Studio (rebuild)
+
+The separate Studio app adds saved local projects, a waveform interface, original/processed
+preview audition, durable render history and WAV/FLAC/MP3 export.
+
+On Windows, install Python 3.12 (64-bit), run `SETUP_STUDIO_WINDOWS.cmd` once,
+then run `START_STUDIO_WINDOWS.cmd`. See [the startup guide](docs/windows-studio.md).
+
+For development: `python -m pip install -r requirements-studio-dev.txt`, then
+`python -m studio.launch`. Studio uses a loopback-only server, with data in
+`%LOCALAPPDATA%/8DEngineStudio` (or the `EIGHTD_STUDIO_DATA_DIR` override).
+
+Studio does not import the hosted app's accounts, payments or cloud providers.
